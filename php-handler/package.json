@@ -1,0 +1,18 @@
+{
+    "name": "@yggdrasil-au/php-handler",
+    "version": "0.1.0",
+    "main": "build-php.js",
+    "bin": {
+        "build-php": "build-php.js"
+    },
+    "type": "module",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Yggdrasil",
+    "license": "ISC",
+    "dependencies": {
+        "fs-extra": "^11.1.1",
+        "glob": "^10.3.3"
+    }
+}

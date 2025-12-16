@@ -1,0 +1,41 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Image conversion configuration",
+    "description": "An array of per-file configuration objects. Each object should identify the source filename and optionally a list of target widths (pixels) to generate.",
+    "type": "array",
+    "minItems": 0,
+    "items": {
+        "type": "object",
+        "required": ["source"],
+        "additionalProperties": false,
+        "properties": {
+            "source": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact filename (including extension) in the input directory to which this configuration applies."
+            },
+            "sizes": {
+                "type": "array",
+                "description": "Array of target widths (in pixels). If omitted or empty, the script will compress the original image width.",
+                "items": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "uniqueItems": true,
+                "minItems": 0
+            }
+        }
+    },
+    "examples": [
+        [
+            {
+                "source": "123-MyTitle-Source.png",
+                "sizes": [320, 640, 1280]
+            },
+            {
+                "source": "456-Other-Source.jpg",
+                "sizes": []
+            }
+        ]
+    ]
+}

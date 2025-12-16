@@ -1,0 +1,15 @@
+
+**/Stuff/
+
+**/capacitor-assets/..git/
+
+**/bin/
+**/dist
+**/node_modules
+**/src-old/
+**/test-old/
+**/.DS_Store
+
+**/.history/
+package-lock.json
+pnpm-lock.yaml

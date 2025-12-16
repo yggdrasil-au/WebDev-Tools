@@ -1,0 +1,20 @@
+{
+    "name": "@yggdrasil-au/htm-minify",
+    "version": "0.1.0",
+    "main": "htm-minify.js",
+    "bin": {
+        "htm-minify": "htm-minify.js"
+    },
+    "type": "module",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Yggdrasil",
+    "license": "ISC",
+    "dependencies": {
+        "fast-glob": "^3.3.3",
+        "html-minifier-terser": "^7.2.0",
+        "clean-css": "^5.3.3",
+        "terser": "^5.37.0"
+    }
+}

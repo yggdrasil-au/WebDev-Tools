@@ -1,0 +1,16 @@
+{
+    "name": "@yggdrasil-au/ygg-webp",
+    "version": "0.1.4",
+    "main": "Main.js",
+    "type": "module",
+    "bin": {
+        "ygg-webp": "Main.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "",
+    "description": "",
+    "dependencies": {
+        "sharp": "^0.34.5"
+    }
+}

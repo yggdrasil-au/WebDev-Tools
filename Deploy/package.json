@@ -1,0 +1,24 @@
+{
+    "name": "@yggdrasil-au/deploy",
+    "version": "0.1.0",
+    "main": "main.mjs",
+    "bin": {
+        "deploy": "main.mjs"
+    },
+    "type": "module",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "deploy",
+        "sftp",
+        "ssh"
+    ],
+    "author": "Yggdrasil",
+    "license": "ISC",
+    "dependencies": {
+        "dotenv": "^16.4.5",
+        "ssh2": "^1.15.0",
+        "ssh2-sftp-client": "^10.0.3"
+    }
+}
