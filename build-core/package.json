@@ -1,0 +1,16 @@
+{
+    "name": "@yggdrasil-au/build-core",
+    "version": "0.1.0",
+    "description": "Shared build primitives for the monorepo (library, not a framework).",
+    "type": "module",
+    "main": "./index.mjs",
+    "exports": {
+        ".": "./index.mjs"
+    },
+    "files": [
+        "index.mjs",
+        "src/"
+    ],
+    "author": "Yggdrasil",
+    "license": "ISC"
+}

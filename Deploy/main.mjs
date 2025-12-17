@@ -206,8 +206,7 @@ const host = merged.host || builtinDefaults.host;
 const port = Number(merged.port ?? builtinDefaults.port);
 const username = merged.username;
 const privateKeyPath = merged.privateKeyPath;
-// removed: const passphrase = merged.passphrase;
-let passphrase; // prompt only if needed
+let passphrase = merged.passphrase; // prompt only if needed
 const localDir = path.resolve(merged.localDir || builtinDefaults.localDir);
 const remoteDir = merged.remoteDir;
 const cleanRemote = boolFromEnv(merged.cleanRemote, builtinDefaults.cleanRemote);
