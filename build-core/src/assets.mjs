@@ -213,6 +213,19 @@ export function createAssetManager({
             await copyPath(abs.distRoot, abs.capSync, { overwrite: true, dereference: true })
         }
 
+        // Remove api folder from website and capacitorsync as it is internal only
+        const apiRel = 'api'
+        const websiteApi = path.resolve(abs.website, apiRel)
+        const capSyncApi = path.resolve(abs.capSync, apiRel)
+
+        if (dryRun) {
+            log('[dry-run] remove', websiteApi)
+            log('[dry-run] remove', capSyncApi)
+        } else {
+            await removePath(websiteApi)
+            await removePath(capSyncApi)
+        }
+
         let removedCount = 0
         removedCount += await pruneFromCapSyncBySrcWeb()
         removedCount += await pruneExtraFromCapSync()
