@@ -14,7 +14,7 @@ This Repo contains various utility scripts and tools required by yggdrasil web p
 | **[php-handler](php-handler/)**                 | `@yggdrasil-au/php-handler`      | Handles PHP in astro build process.                      |
 | **[ts-builder](ts-builder/)**                   | `@yggdrasil-au/ts-builder`       | Shared TypeScript builder configuration and script.      |
 | **[web-image-converter](web-image-converter/)** | `@yggdrasil-au/ygg-webp`         | Tool for converting images to WebP format.               |
-| **[WLAP-CLI](WLAP-Server-CLI/)**                | `lampctl-cli`                    | Development xampp web server management CLI.             |
+| **[WLAP-CLI](WLAP-Server-CLI/)**                | `wlampctl-cli`                   | Development xampp web server management CLI.             |
 
 ## Usage
 
