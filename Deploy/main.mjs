@@ -10,6 +10,7 @@
 // Optional:
 //   host (default 100.106.185.12) | port (22) | local dir (www/website)
 //   passphrase | cleanRemote | archiveExisting | archiveDir | minRemoteDepth (2)
+//   preserveDir | preserveFiles (array)
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,6 +50,7 @@ function parseArgs(argv) {
         'check', 'dry-run', 'archive', 'profile', 'config', 'list',
         'host', 'port', 'username', 'key', 'password', 'local', 'remote',
         'clean', 'archive-dir', 'min-depth',
+        'preserve-dir',
         // ssh command hooks
         'pre', 'post',
     ]);
@@ -156,6 +158,7 @@ const envMap = {
     DEPLOY_ARCHIVE_EXISTING: 'archiveExisting',
     DEPLOY_ARCHIVE_DIR: 'archiveDir',
     DEPLOY_MIN_REMOTE_DEPTH: 'minRemoteDepth',
+    DEPLOY_PRESERVE_DIR: 'preserveDir'
 };
 
 function coerceTypes(obj) {
@@ -186,6 +189,7 @@ const cliCfgRaw = {
     archiveExisting: parsed.flags['archive'],
     archiveDir: parsed.flags['archive-dir'],
     minRemoteDepth: parsed.flags['min-depth'],
+    preserveDir: parsed.flags['preserve-dir']
 };
 
 // Only keep CLI keys explicitly provided (avoid overwriting with undefined)
@@ -213,6 +217,7 @@ const cleanRemote = boolFromEnv(merged.cleanRemote, builtinDefaults.cleanRemote)
 const archiveExisting = forceArchive || boolFromEnv(merged.archiveExisting, builtinDefaults.archiveExisting);
 const archiveDir = merged.archiveDir; // optional
 const minRemoteDepth = Number(merged.minRemoteDepth ?? builtinDefaults.minRemoteDepth);
+const preserveDir = merged.preserveDir; // optional
 // Command hooks (arrays)
 const toCmdArray = (cfgVal, cliVal) => {
     const arr = [];
@@ -223,6 +228,7 @@ const toCmdArray = (cfgVal, cliVal) => {
 };
 const preCommands = toCmdArray(merged.preCommands, parsed.flags['pre']);
 const postCommands = toCmdArray(merged.postCommands, parsed.flags['post']);
+const preserveFiles = Array.isArray(merged.preserveFiles) ? merged.preserveFiles : [];
 
 // Helpers for remote posix paths
 const pposix = path.posix;
@@ -259,6 +265,10 @@ if (!earlyExit) {
         console.log('- clean remote:', cleanRemote);
         console.log('- archive existing:', archiveExisting);
         if (archiveExisting) console.log('- archive dir:', archiveDir || '(same parent as remote dir)');
+        if (preserveFiles.length) {
+            console.log('- preserve files:', preserveFiles.join(', '));
+            console.log('- preserve dir:', preserveDir || '(missing)');
+        }
         if (preCommands.length) {
             console.log('- pre-commands:');
             for (const c of preCommands) console.log(`    > ${c}`);
@@ -283,6 +293,10 @@ if (!earlyExit) {
             console.log(`! remote path too shallow: ${remoteDirNorm} (segments=${remoteSegments.length}, min=${minRemoteDepth})`);
             bad = true;
         }
+        if (preserveFiles.length > 0 && !preserveDir) {
+            console.log('! missing: preserveDir (required when preserveFiles is set)');
+            bad = true;
+        }
 
         console.log('\n[deploy] Check complete. No connection attempted.');
         if (bad) process.exitCode = 1;
@@ -299,6 +313,9 @@ if (!earlyExit) {
         }
         if (remoteSegments.length < minRemoteDepth) {
             fail(`DEPLOY_REMOTE_DIR seems too shallow: ${remoteDirNorm} (segments=${remoteSegments.length}, min=${minRemoteDepth})`);
+        }
+        if (preserveFiles.length > 0 && !preserveDir) {
+            fail('preserveDir is required when preserveFiles is configured');
         }
     }
 }
@@ -451,6 +468,40 @@ if (!earlyExit) {
             }
         }
 
+        // ========================================================
+        // PRESERVE FILES LOGIC (Move Out)
+        // ========================================================
+        const preserveDirNorm = preserveDir ? normalizeRemote(preserveDir) : null;
+        if (preserveFiles.length > 0 && preserveDirNorm) {
+            const exists = await client.exists(remoteDirNorm);
+            if (exists) {
+                // Ensure preserve folder exists
+                if (!(await client.exists(preserveDirNorm))) {
+                    console.log(`[deploy] Creating preserve directory: ${preserveDirNorm}`);
+                    await client.mkdir(preserveDirNorm, true);
+                }
+
+                console.log(`[deploy] Preserving ${preserveFiles.length} file(s) to ${preserveDirNorm}...`);
+                for (const file of preserveFiles) {
+                    const src = joinRemote(remoteDirNorm, file);
+                    const dest = joinRemote(preserveDirNorm, file);
+                    const fileExists = await client.exists(src);
+                    if (fileExists) {
+                        try {
+                            // remove dest if it exists to allow overwrite/move
+                            if (await client.exists(dest)) await client.delete(dest);
+                            await client.rename(src, dest);
+                            console.log(`  -> Saved: ${file}`);
+                        } catch (err) {
+                            console.warn(`  ! Failed to preserve ${file}: ${err.message}`);
+                        }
+                    } else {
+                        console.log(`  (Skipped missing: ${file})`);
+                    }
+                }
+            }
+        }
+
         const exists = await client.exists(remoteDirNorm);
         if (exists) {
             if (archiveExisting) {
@@ -481,6 +532,26 @@ if (!earlyExit) {
         if (!targetExists) {
             console.log(`[deploy] Ensuring remote directory: ${remoteDirNorm}`);
             await client.mkdir(remoteDirNorm, true);
+        }
+
+        // ========================================================
+        // PRESERVE FILES LOGIC (Restore)
+        // ========================================================
+        if (preserveFiles.length > 0 && preserveDirNorm) {
+            console.log(`[deploy] Restoring preserved files from ${preserveDirNorm}...`);
+            for (const file of preserveFiles) {
+                const src = joinRemote(preserveDirNorm, file);
+                const dest = joinRemote(remoteDirNorm, file);
+                const fileExists = await client.exists(src);
+                if (fileExists) {
+                    try {
+                        await client.rename(src, dest);
+                        console.log(`  -> Restored: ${file}`);
+                    } catch (err) {
+                        console.warn(`  ! Failed to restore ${file}: ${err.message}`);
+                    }
+                }
+            }
         }
 
         console.log(`[deploy] Uploading ${localDir} -> ${remoteDirNorm}`);
