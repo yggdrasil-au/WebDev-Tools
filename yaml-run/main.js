@@ -45,7 +45,7 @@ async function loadVariables() {
     if (rawConfig.sources) {
         for (const [scope, filePath] of Object.entries(rawConfig.sources)) {
             const absolutePath = path.resolve(CWD, filePath);
-            
+
             if (!fs.existsSync(absolutePath)) {
                 console.warn(`[yaml-run] Warning: Source file not found: ${filePath}`);
                 continue;
@@ -74,7 +74,7 @@ async function loadVariables() {
  */
 function injectVariables(commandStr, variables) {
     if (typeof commandStr !== 'string') return commandStr;
-    
+
     return commandStr.replace(/\$\((.*?)\)/g, (match, key) => {
         const val = variables[key.trim()];
         if (val === undefined) {
@@ -97,7 +97,7 @@ function executeShell(command, envVars) {
         const child = spawn(cleanCommand, {
             shell: true,
             stdio: 'inherit',
-            env: { ...process.env, ...envVars }
+            env: { ...process.env, ...(envVars ?? {}) }
         });
 
         child.on('close', (code) => {
@@ -105,6 +105,32 @@ function executeShell(command, envVars) {
             else reject(new Error(`Command failed with code ${code}`));
         });
     });
+}
+
+function looksLikeTaskName(value) {
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return false;
+
+    // If it contains obvious shell operators/whitespace, treat it as a command.
+    return !(/[\s&|;<>]/.test(trimmed));
+}
+
+async function runCommandOrTask(value, scriptConfig, variables) {
+    if (typeof value !== 'string') {
+        throw new Error(`Unsupported step type: ${typeof value}`);
+    }
+
+    const trimmed = value.trim();
+
+    // Prefer task execution if it exists; otherwise treat as a shell command.
+    if (Object.prototype.hasOwnProperty.call(scriptConfig, trimmed) && looksLikeTaskName(trimmed)) {
+        await runTask(trimmed, scriptConfig, variables);
+        return;
+    }
+
+    const finalCmd = injectVariables(value, variables);
+    await executeShell(finalCmd);
 }
 
 /**
@@ -119,18 +145,25 @@ async function runTask(taskName, scriptConfig, variables) {
 
     // CASE 1: Task is a simple string command
     if (typeof task === 'string') {
-        const finalCmd = injectVariables(task, variables);
-        await executeShell(finalCmd);
+        await runCommandOrTask(task, scriptConfig, variables);
+        return;
+    }
+
+    // CASE 1b: Task is a list of steps (shorthand series)
+    if (Array.isArray(task)) {
+        for (const step of task) {
+            await runCommandOrTask(step, scriptConfig, variables);
+        }
         return;
     }
 
     // CASE 2: Task is an object (Complex Logic)
     if (typeof task === 'object') {
-        
+
         // Handle Parallel Execution
         if (task.parallel && Array.isArray(task.parallel)) {
             console.log(`\x1b[33m[Parallel] Starting: ${task.parallel.join(', ')}\x1b[0m`);
-            const promises = task.parallel.map(t => runTask(t, scriptConfig, variables));
+            const promises = task.parallel.map((t) => runCommandOrTask(t, scriptConfig, variables));
             await Promise.all(promises);
             return;
         }
@@ -138,18 +171,19 @@ async function runTask(taskName, scriptConfig, variables) {
         // Handle Series Execution
         if (task.series && Array.isArray(task.series)) {
             for (const subTask of task.series) {
-                await runTask(subTask, scriptConfig, variables);
+                await runCommandOrTask(subTask, scriptConfig, variables);
             }
             return;
         }
 
         // Handle direct "cmd" or "script" key inside object
         if (task.cmd || task.script) {
-            const finalCmd = injectVariables(task.cmd || task.script, variables);
-            await executeShell(finalCmd);
+            await runCommandOrTask(task.cmd || task.script, scriptConfig, variables);
             return;
         }
     }
+
+    throw new Error(`Task "${taskName}" has an unsupported shape.`);
 }
 
 // --- Main Execution Entry ---
