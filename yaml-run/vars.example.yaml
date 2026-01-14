@@ -1,0 +1,34 @@
+# vars.example.yaml
+# ------------------------------------------------------------------
+# Variable Configuration for yaml-run
+# ------------------------------------------------------------------
+# This file defines variables available to your scripts via {{placeholder}} syntax.
+#
+# Load order:
+# 1. 'sources' files are loaded and merged in order.
+# 2. 'vars' defined in this file are merged last (taking precedence).
+# 3. Placeholders are resolved recursively.
+
+# (Optional) Import external variable files
+sources:
+  pkg: "./package.json" # Load package.json as 'pkg' variable
+  # - "./config/secrets.yaml"
+  # - "./config/environment.yaml"
+
+# Define variables
+vars:
+  project:
+    name: "MyAwesomeApp"
+    version: "1.2.0"
+
+  # Nested objects structure automatically flattens for access
+  # e.g. {{paths.dist}} or {{paths.src}}
+  paths:
+    root: "."
+    src: "{{paths.root}}/src"         # You can reference other variables
+    dist: "{{paths.root}}/dist"
+    logs: "{{paths.dist}}/logs"
+
+  commands:
+    # You can define partial commands or arguments here
+    build_flags: "--release --verbose"

@@ -1,0 +1,117 @@
+# Deploy Configuration Example
+# ------------------------------------------------------------------
+# Global defaults applied to all deployments unless overridden.
+# You can override any of these in specific deployment profiles.
+# ------------------------------------------------------------------
+defaults:
+    # Connection Details
+    host: 0.0.0.0
+    port: 22
+    username: root
+
+    # Authentication (Choose one preferred method)
+    # Recommended: SSH Key
+    privateKeyPath: /absolute/path/to/private/key
+    # Optional: Passphrase if key is encrypted
+    # passphrase: "my_secret_passphrase"
+    # Alternative: Password (less secure)
+    # password: "my_password"
+
+    # Source Directory (Relative to this config file or CWD)
+    localDir: www/website
+
+    # Safety Check: Minimum path depth for remoteDir to avoid wiping root
+    # e.g., /var/www is depth 2. Prevents accidental path like /
+    minRemoteDepth: 2
+
+    # Deployment Strategy: 'inplace' (default) or 'symlink'
+    # - inplace: Uploads directly to remoteDir. logic: overwrite/update.
+    # - symlink: Uploads to a new timestamped directory in 'releases', then links remoteDir to it.
+    #            Enables zero-downtime and instant rollbacks.
+    strategy: inplace
+
+    # Transfer Method: 'sftp' (default) or 'tar'
+    # - sftp: Uploads file-by-file. Reliable but slow for thousands of small files (node_modules).
+    # - tar: Compresses locally, streams/uploads tarball, untars remotely. Significantly faster.
+    #        Requires 'tar' to be available on both local and remote systems.
+    transfer: sftp
+
+    # 'inplace' Strategy Options
+    # ---------------------------
+    # Archive the existing remote directory before overwriting?
+    archiveExisting: false
+    # Directory to move old content to (if archiveExisting: true)
+    archiveDir: /var/www/archive
+    # Wipe the remote directory contents before uploading? (Use with caution)
+    cleanRemote: false
+
+# ------------------------------------------------------------------
+# Deployment Profiles
+# Run with: node deploy.js --profile <name>
+# ------------------------------------------------------------------
+deployments:
+    # Profile Name: 'production'
+    # Usage: node deploy.js --profile production
+    production:
+        remoteDir: /var/www/production/html
+        archiveExisting: true
+        archiveDir: /var/www/production/archive
+
+    # Profile Name: 'app-backend'
+    # Demonstrates 'symlink' strategy with 'tar' transfer for a heavy application
+    app-backend:
+        strategy: symlink
+        transfer: tar
+
+        # Override local source
+        localDir: dist/api
+        # The 'live' path will be a symlink to the latest release
+        remoteDir: /var/www/myapp/api
+
+        # Symlink Strategy Options
+        # ------------------------
+        # Where to store timestamped versions (default: ../releases relative to remoteDir)
+        releasesDir: /var/www/myapp/releases
+        # How many past releases to keep on disk
+        keepReleases: 5
+
+        # Persistent Files/Directories
+        # These are copied from the previous active release to the new release
+        # before switching the symlink. Useful for databases, uploads, config files.
+        preserveFiles:
+            - storage/
+            - database.sqlite
+            - .env
+
+        # Tar/Transfer Performance
+        # ------------------------
+        # Split tarball into chunks (MB). 0 = no splitting.
+        # Useful for unstable connections or very large uploads.
+        batchSizeMB: 50
+        # Upload multiple chunks/files in parallel.
+        concurrency: 2
+
+        # Command Hooks
+        # -------------
+        # Commands to run on the remote server BEFORE deployment starts
+        preCommands:
+            - echo "Starting deployment..."
+            # - systemctl stop myapp.service
+
+        # Commands to run on the remote server AFTER deployment finishes
+        # (For symlink strategy, this runs after the symlink switch)
+        postCommands:
+            # Fix permissions
+            - chown -R www-data:www-data /var/www/myapp/api
+            - chmod +x /var/www/myapp/api/bin/startup.sh
+            # Restart services
+            # - systemctl restart myapp.service
+            - echo "Deployment Success!"
+
+    # Profile Name: 'staging'
+    # Demonstrates overriding host info for a different environment
+    staging:
+        host: 192.168.1.50
+        # Uses defaults for key/user, just changes target
+        remoteDir: /var/www/staging/html
+        cleanRemote: true # Wipes staging folder clean before upload

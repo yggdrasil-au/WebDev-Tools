@@ -1,0 +1,78 @@
+# scripts.example.yaml
+# ------------------------------------------------------------------
+# Scripts Configuration for yaml-run
+# ------------------------------------------------------------------
+# Run tasks using: yaml-run <task_name>
+#
+# The tool automatically loads 'vars.yaml' from the current directory
+# and injects variables using {{variable.name}} syntax.
+
+scripts:
+  # =================================================================
+  # 1. Basic String Commands
+  # =================================================================
+  # Any simple string is treated as a command.
+  # Variable placeholders {{...}} are replaced before execution.
+  clean: "rimraf {{paths.dist}}"
+
+  # =================================================================
+  # 2. Sequential Execution (Series)
+  # =================================================================
+  # Use a YAML list (array) to run commands one after another.
+  # If any command fails (exit code != 0), the sequence stops.
+  build:
+    - clean                       # References the 'clean' task above
+    - "mkdir {{paths.dist}}"      # Raw shell command
+    - "tsc {{commands.build_flags}}"
+
+  # Explicit 'series' object syntax (Functionally identical to the list above)
+  # Useful if you prefer explicit labeling.
+  build:explicit:
+    series:
+      - clean
+      - "tsc"
+
+  # =================================================================
+  # 3. Parallel Execution
+  # =================================================================
+  # Use the 'parallel' key to run tasks simultaneously.
+  lint:
+    parallel:
+      - "eslint {{paths.src}}/**"
+      - "stylelint {{paths.src}}/**/*.css"
+
+  # =================================================================
+  # 4. Combinations
+  # =================================================================
+  # You can mix series and parallel execution.
+  deploy:
+    series:
+      - build                     # Run build (series)
+      - lint                      # Run lint (parallel)
+      - "echo Deploying {{project.name}}..."
+
+  # =================================================================
+  # 5. IMPORTANT: Internal Tasks vs. Shell Commands
+  # =================================================================
+  # The runner makes a decision for every step:
+  #
+  # A) Is it an Internal Task?
+  #    If the string has NO spaces and NO shell operators (&&, ||, ;, |),
+  #    it looks for a matching key in this file.
+  #
+  # B) Is it a Shell Command?
+  #    If the string has spaces or operators, it is passed DIRECTLY
+  #    to your system shell (bash/powershell/cmd).
+
+  # Example: Working with Shell Operators
+  # -------------------------------------
+
+  # WRONG:
+  # The shell receives "clean && echo done".
+  # usage-fail: "clean && echo done"
+  # -> Fails because 'clean' is a YAML task, not a system executable on your PATH.
+
+  # CORRECT:
+  # Call the CLI tool explicitly to resolve the internal task inside a shell string.
+  usage-pass: "yaml-run clean && echo done"
+
