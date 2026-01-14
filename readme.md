@@ -12,9 +12,11 @@ This Repo contains various utility scripts and tools required by yggdrasil web p
 | **[htm-minify](htm-minify/)**                   | `@yggdrasil-au/htm-minify`       | Minifies HTML files.                                     |
 | **[js-minify](js-minify/)**                     | `@yggdrasil-au/js-minify`        | Minifies JavaScript files.                               |
 | **[php-handler](php-handler/)**                 | `@yggdrasil-au/php-handler`      | Handles PHP in astro build process.                      |
+| **[S3](S3/)**                                   | `@yggdrasil-au/cloudflare-r2`    | Utility to upload files to Cloudflare R2.                |
 | **[ts-builder](ts-builder/)**                   | `@yggdrasil-au/ts-builder`       | Shared TypeScript builder configuration and script.      |
 | **[web-image-converter](web-image-converter/)** | `@yggdrasil-au/ygg-webp`         | Tool for converting images to WebP format.               |
 | **[WLAP-CLI](WLAP-Server-CLI/)**                | `wlampctl-cli`                   | Development xampp web server management CLI.             |
+| **[yaml-run](yaml-run/)**                       | `@yggdrasil-au/yaml-run`         | Lightweight YAML-based task runner with workspace support.|
 
 ## Usage
 

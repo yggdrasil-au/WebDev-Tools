@@ -20,11 +20,11 @@ function getBanner(pkg) {
         return ''
     }
     let banner = pkg.buildConfig.banner
-    
+
     // Replace ${variable} with value from pkg
     return banner.replace(/\$\{(.+?)\}/g, (match, p1) => {
         if (p1 === 'year') return year;
-        
+
         const keys = p1.split('.')
         let value = pkg
         for (const key of keys) {
@@ -42,6 +42,7 @@ const banner = getBanner(pkg)
 
 const srcDir = path.resolve(process.cwd(), 'source/ts')
 const outDir = path.resolve(process.cwd(), 'www/dist/js')
+const noSourceMap = process.argv.includes('--no-source-map') || process.argv.includes('--no-sourcemap')
 
 // Recursively find .ts files
 function findTSFiles(dir) {
@@ -85,7 +86,7 @@ async function buildFile(inputFile) {
             nodeResolve({ browser: true }),
             typescript({
                 tsconfig: path.resolve(process.cwd(), 'tsconfig.json'),
-                sourceMap: true,
+                sourceMap: !noSourceMap,
             }),
         ],
         onwarn(warning, warn) {
@@ -102,7 +103,7 @@ async function buildFile(inputFile) {
         inlineDynamicImports: true,
         banner,
         name: isServiceWorker ? 'ServiceWorker' : name,
-        sourcemap: true,
+        sourcemap: !noSourceMap,
     })
 
     console.log(`Built: ${inputFile} -> ${outputFile}`)
