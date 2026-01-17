@@ -5,6 +5,9 @@ namespace NetDeploy.Config;
 
 public class DeployConfig
 {
+    [YamlMember(Alias = "vars")]
+    public Dictionary<string, string> Vars { get; set; } = new();
+
     [YamlMember(Alias = "defaults")]
     public DeploymentProfile Defaults { get; set; } = new();
 
@@ -31,6 +34,18 @@ public class DeploymentProfile
 
     [YamlMember(Alias = "password")]
     public string? Password { get; set; }
+
+    [YamlMember(Alias = "relayHost")]
+    public string? RelayHost { get; set; }
+
+    [YamlMember(Alias = "relayPort")]
+    public int? RelayPort { get; set; }
+
+    [YamlMember(Alias = "relayUsername")]
+    public string? RelayUsername { get; set; }
+
+    [YamlMember(Alias = "relayPrivateKeyPath")]
+    public string? RelayPrivateKeyPath { get; set; }
 
     [YamlMember(Alias = "localDir")]
     public string? LocalDir { get; set; }
@@ -101,6 +116,11 @@ public class DeploymentProfile
         ArchiveExisting ??= defaults.ArchiveExisting;
         ArchiveDir ??= defaults.ArchiveDir;
         PreserveDir ??= defaults.PreserveDir;
+        
+        RelayHost ??= defaults.RelayHost;
+        RelayPort ??= defaults.RelayPort;
+        RelayUsername ??= defaults.RelayUsername;
+        RelayPrivateKeyPath ??= defaults.RelayPrivateKeyPath;
 
         if (defaults.PreCommands.Count > 0 && PreCommands.Count == 0) PreCommands.AddRange(defaults.PreCommands);
         if (defaults.PostCommands.Count > 0 && PostCommands.Count == 0) PostCommands.AddRange(defaults.PostCommands);

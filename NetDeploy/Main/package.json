@@ -1,6 +1,6 @@
 {
     "name": "@yggdrasil-au/netdeploy",
-    "version": "0.3.0",
+    "version": "0.3.2",
     "description": "High performance deployment tool using .NET 10",
     "main": "netdeploy.cmd",
     "bin": {

@@ -2,6 +2,7 @@ using NetDeploy.Config;
 using Spectre.Console;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using System.Text.RegularExpressions;
 
 namespace NetDeploy;
 
@@ -60,6 +61,21 @@ class Program
             {
                 AnsiConsole.MarkupLine($"[grey]Loading config from {path}[/]");
                 var yaml = File.ReadAllText(path);
+
+                // 1. First Pass: Extract Variables
+                var firstPassDeserializer = new DeserializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+                
+                var varConfig = firstPassDeserializer.Deserialize<DeployConfig>(yaml);
+
+                var vars = varConfig?.Vars ?? new Dictionary<string, string>();
+                
+                // 1.5. Validate and replace variables
+                yaml = ApplyVarsWithValidation(yaml, vars, path);
+
+                // 2. Second Pass: Full Deserialization
                 var deserializer = new DeserializerBuilder()
                     .WithNamingConvention(CamelCaseNamingConvention.Instance)
                     .Build();
@@ -81,5 +97,61 @@ class Program
             }
         }
         return null;
+    }
+
+    private static string ApplyVarsWithValidation(string yaml, Dictionary<string, string> vars, string configPath)
+    {
+        var placeholderRegex = new Regex("{{([a-zA-Z0-9_]+)}}", RegexOptions.Compiled);
+        var matches = placeholderRegex.Matches(yaml);
+
+        if (matches.Count == 0)
+        {
+            return yaml;
+        }
+
+        var unknownNames = new HashSet<string>();
+        var distinctPlaceholders = new HashSet<string>();
+
+        foreach (Match match in matches)
+        {
+            if (match.Groups.Count > 1)
+            {
+                var name = match.Groups[1].Value;
+                distinctPlaceholders.Add(name);
+
+                if (!vars.ContainsKey(name))
+                {
+                    unknownNames.Add(name);
+                }
+            }
+        }
+
+        if (unknownNames.Count > 0)
+        {
+            var msg = $"Unknown template variables in deploy config '{configPath}':\n";
+            foreach (var name in unknownNames)
+            {
+                // Find first occurrence for context
+                var match = matches.FirstOrDefault(m => m.Groups[1].Value == name);
+                var context = match != null ? $" (near: ...{match.Value}...)" : "";
+                msg += $"- {name}{context}\n";
+            }
+            throw new Exception(msg);
+        }
+
+        if (vars.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[grey]Substituting {distinctPlaceholders.Count} variables...[/]");
+            foreach (var kvp in vars)
+            {
+                var placeholder = "{{" + kvp.Key + "}}";
+                if (yaml.Contains(placeholder))
+                {
+                    yaml = yaml.Replace(placeholder, kvp.Value);
+                }
+            }
+        }
+        
+        return yaml;
     }
 }
