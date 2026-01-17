@@ -1,5 +1,7 @@
 import { Client } from 'ssh2';
 import readline from 'node:readline';
+import process from 'node:process';
+import { withRetry } from '../utils/retry.mjs';
 
 /**
  * Run one or more commands over SSH.
@@ -16,7 +18,9 @@ export async function runCommandsOverSSH(conn, commands, options = {}) {
 
     for (const cmd of commands) {
         try {
-            await execOne(cmd);
+            await withRetry(async () => {
+                return execOne(cmd);
+            }, { name: 'SSH Command' });
         } catch (error) {
             if (verbose) console.error('[ssh] Error:', error.message || error);
             if (stopOnError) throw error;
@@ -60,7 +64,10 @@ export async function runCommandsOverSSH(conn, commands, options = {}) {
                 privateKey: conn.privateKey,
                 passphrase: pass,
                 password: conn.password,
-                tryKeyboard: false
+                tryKeyboard: false,
+                keepaliveInterval: 10000,
+                keepaliveCountMax: 10,
+                readyTimeout: 60000
             });
         });
     }

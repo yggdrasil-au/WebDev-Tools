@@ -8,9 +8,10 @@ This Repo contains various utility scripts and tools required by yggdrasil web p
 |-------------------------------------------------|----------------------------------|----------------------------------------------------------|
 | **[build-core](build-core/)**                   | `@yggdrasil-au/build-core`       | Shared build primitives for core www projects.           |
 | **[capacitor-assets](capacitor-assets/)**       | `@yggdrasil-au/capacitor-assets` | Generates icons and splash screens for PWAs.             |
-| **[Deploy](Deploy/)**                           | `@yggdrasil-au/deploy`           | SFTP/SSH deployment utility.                             |
+| **[Deploy](Deploy/)**                           | `@yggdrasil-au/deploy`           | old SFTP/SSH deployment utility.                         |
 | **[htm-minify](htm-minify/)**                   | `@yggdrasil-au/htm-minify`       | Minifies HTML files.                                     |
 | **[js-minify](js-minify/)**                     | `@yggdrasil-au/js-minify`        | Minifies JavaScript files.                               |
+| **[NetDeploy](NetDeploy/)**                     | `@yggdrasil-au/net-deploy`       | .NET deployment utility.                                 |
 | **[php-handler](php-handler/)**                 | `@yggdrasil-au/php-handler`      | Handles PHP in astro build process.                      |
 | **[S3](S3/)**                                   | `@yggdrasil-au/cloudflare-r2`    | Utility to upload files to Cloudflare R2.                |
 | **[ts-builder](ts-builder/)**                   | `@yggdrasil-au/ts-builder`       | Shared TypeScript builder configuration and script.      |

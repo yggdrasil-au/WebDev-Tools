@@ -1,0 +1,19 @@
+{
+    "name": "@yggdrasil-au/netdeploy",
+    "version": "0.3.0",
+    "description": "High performance deployment tool using .NET 10",
+    "main": "netdeploy.cmd",
+    "bin": {
+        "netdeploy": "netdeploy.cmd"
+    },
+    "scripts": {
+        "build": "dotnet publish NetDeploy.csproj -c Release -r win-x64 --self-contained false -o dist"
+    },
+    "keywords": [
+        "deploy",
+        "dotnet",
+        "tool"
+    ],
+    "author": "Yggdrasil",
+    "license": "ISC"
+}

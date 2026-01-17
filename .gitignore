@@ -4,6 +4,7 @@
 **/capacitor-assets/..git/
 
 **/bin/
+**/obj/
 **/dist
 **/node_modules
 **/src-old/
@@ -13,3 +14,4 @@
 **/.history/
 package-lock.json
 pnpm-lock.yaml
+
