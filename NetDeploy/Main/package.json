@@ -2,12 +2,15 @@
     "name": "@yggdrasil-au/netdeploy",
     "version": "0.3.2",
     "description": "High performance deployment tool using .NET 10",
-    "main": "netdeploy.cmd",
+    "main": "netdeploy.js",
     "bin": {
-        "netdeploy": "netdeploy.cmd"
+        "netdeploy": "netdeploy.js"
     },
     "scripts": {
-        "build": "dotnet publish NetDeploy.csproj -c Release -r win-x64 --self-contained false -o dist"
+        "build": "dotnet publish NetDeploy.csproj -c Release -r win-x64 --self-contained false -o dist",
+        "build-linux": "dotnet publish NetDeploy.csproj -c Release -r linux-x64 --self-contained false -o dist",
+        "clean": "dotnet clean NetDeploy.csproj",
+        "postinstall": "node build.js"
     },
     "keywords": [
         "deploy",
@@ -15,5 +18,9 @@
         "tool"
     ],
     "author": "Yggdrasil",
-    "license": "ISC"
+    "license": "ISC",
+    "os": [
+        "win32",
+        "linux"
+    ]
 }
