@@ -1,6 +1,8 @@
 
 # tool for managing global WLAP server environment across all web dev projects
 [submodule "WLAP-Server-CLI"]
-    path = WLAP-Server-CLI/Main
+    path = Compiled/WLAP-Server-CLI/Main
     url = https://github.com/yggdrasil-au/xampp-cli.git
+
+
 
