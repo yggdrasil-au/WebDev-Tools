@@ -2,215 +2,219 @@ import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-/**
- *  Convert images based on configuration from a JSON file.
- *  @param {string} inputDir - Directory containing source images.
- *  @param {string} outputDir - Directory to save converted images.
- *  @param {string} configPath - Path to the JSON configuration file.
- */
-export async function convertImages(inputDir, outputDir, configPath) {
-    try {
-        // Ensure output directory exists
-        await fs.mkdir(outputDir, { recursive: true });
+/* :: :: Function :: START :: */
 
-        // Check if input directory exists
+/**
+ * Convert images based on configuration from a JSON file.
+ * @param {string} inputDir - Directory containing source images.
+ * @param {string} outputDir - Directory to save converted images.
+ * @param {string} configPath - Path to the JSON configuration file.
+ */
+export async function convertImages (
+    inputDir,
+    outputDir,
+    configPath
+) {
+    /* :: :: Helpers :: START :: */
+
+    const colors = {
+        red: "\x1b[31m",
+        green: "\x1b[32m",
+        yellow: "\x1b[33m",
+        blue: "\x1b[34m",
+        cyan: "\x1b[36m",
+        dim: "\x1b[2m",
+        reset: "\x1b[0m"
+    };
+
+    /**
+     * Helper for consistent, colorful logging
+     */
+    const log = (
+        color,
+        label,
+        message
+    ) => {
+        console.log(`${colors[color]}[${label}]${colors.reset} ${message}`);
+    };
+
+    /**
+     * Helper to format bytes
+     */
+    const formatSize = (bytes) => {
+        return (bytes / 1024).toFixed(2) + ' KB';
+    };
+
+    /**
+     * Helper to recursively get files
+     */
+    async function getFiles (dir) {
+        const dirents = await fs.readdir(dir, { withFileTypes: true });
+        const files = await Promise.all(dirents.map((dirent) => {
+            const res = path.join(dir, dirent.name);
+            return dirent.isDirectory() ? getFiles(res) : res;
+        }));
+        return files.flat();
+    }
+
+    /* :: :: Helpers :: END :: */
+
+    // //
+
+    /* :: :: Logic :: START :: */
+
+    try {
+        const fullOutputDir = path.resolve(outputDir);
+        const fullInputDir = path.resolve(inputDir);
+
+        // Ensure output directory exists
+        await fs.mkdir(fullOutputDir, { recursive: true });
+
+        // 1. Initial Access Check
         try {
-            await fs.access(inputDir);
+            await fs.access(fullInputDir);
         } catch {
-            console.error("\u001B[31m%s\u001B[0m", `Input directory not found: ${inputDir} at path ${path.resolve(inputDir)}`);
+            log('red', 'ERROR', `Input directory not found: ${fullInputDir}`);
             return;
         }
 
-        // Read and parse the JSON configuration file
+        // 2. Configuration Loading
         let configData;
         try {
             const configFileContent = await fs.readFile(configPath, 'utf-8');
             configData = JSON.parse(configFileContent);
         } catch (error) {
-            console.error("\u001B[31m%s\u001B[0m", `Failed to read or parse JSON configuration file: ${error.message}`);
+            log('red', 'ERROR', `Failed to read or parse JSON config: ${error.message}`);
             return;
         }
 
-        // Check if configData is empty or not an array
         if (!Array.isArray(configData) || configData.length === 0) {
-            console.warn("\u001B[33m%s\u001B[0m", `Configuration file is empty or invalid: ${configPath}`);
+            log('yellow', 'WARN', `Configuration file is empty or invalid.`);
             return;
         }
 
-        // Check for files defined in JSON but missing in source directory
+        // 3. FEATURE RESTORED: Verify files defined in JSON actually exist in source
         for (const configEntry of configData) {
-             const sourcePath = path.join(inputDir, configEntry.source);
-             try {
-                 await fs.access(sourcePath);
-             } catch {
-                 console.error("\u001B[31m%s\u001B[0m", `Error: File defined in JSON not found in source directory: ${configEntry.source}`);
-             }
+            const sourcePath = path.join(fullInputDir, configEntry.source);
+            try {
+                await fs.access(sourcePath);
+            } catch {
+                log('red', 'MISSING', `File defined in JSON not found: ${configEntry.source}`);
+            }
         }
 
-        // Helper to recursively get files
-        async function getFiles(dir) {
-            const dirents = await fs.readdir(dir, { withFileTypes: true });
-            const files = await Promise.all(dirents.map((dirent) => {
-                const res = path.join(dir, dirent.name);
-                return dirent.isDirectory() ? getFiles(res) : res;
-            }));
-            return files.flat();
-        }
+        const files = await getFiles(fullInputDir);
 
-        // Get all files in the source directory
-        const files = await getFiles(inputDir);
-
-        // Check if the input directory is empty
         if (files.length === 0) {
-            console.warn("\u001B[33m%s\u001B[0m", `Input directory is empty: ${inputDir}`);
+            log('yellow', 'WARN', `Input directory is empty.`);
             return;
         }
 
-        // Iterate over all files in the input directory
+        log('blue', 'START', `Processing ${files.length} files...`);
+        console.log('---');
+
         for (const filePath of files) {
-            const relativePath = path.relative(inputDir, filePath);
+            // Paths for logic
+            const relativePath = path.relative(fullInputDir, filePath);
             const normalizedRelativePath = relativePath.split(path.sep).join('/');
 
+            // Paths for file operations & logging (Absolute)
             const relativeDir = path.dirname(relativePath);
-            const targetDir = path.join(outputDir, relativeDir);
+            const targetDir = path.join(fullOutputDir, relativeDir);
+
             await fs.mkdir(targetDir, { recursive: true });
 
             const fileInfo = path.parse(filePath);
             const fileName = fileInfo.base;
             const fileExt = fileInfo.ext.toLowerCase().replace('.', '');
 
-            const customConfig = configData.find(config => config.source === normalizedRelativePath);
+            const customConfig = configData.find(config => {
+                return config.source === normalizedRelativePath;
+            });
 
-            // Special handling for preserving original file
-            if (customConfig && customConfig.original === true) {
-                const outputFileName = fileName; // Keep original filename
-                const outputFilePath = path.join(targetDir, outputFileName);
-
-                console.log("\u001B[32m%s\u001B[0m", `Copying Original (skip processing): ${normalizedRelativePath} -> ${outputFileName}`);
+            // Handle "Original" or SVG-direct flags
+            if (customConfig?.original || (fileExt === 'svg' && customConfig?.output === 'svg')) {
+                const outputFilePath = path.join(targetDir, fileName);
                 try {
                     await fs.copyFile(filePath, outputFilePath);
-                    console.log("\u001B[32m%s\u001B[0m", `Saved: ${outputFilePath}`);
-                } catch (error) {
-                    console.error("\u001B[31m%s\u001B[0m", `Failed to copy ${normalizedRelativePath}:`, error.message);
+                    log('green', 'COPY', `${normalizedRelativePath} (Preserved Original)`);
+                } catch (e) {
+                    log('red', 'FAIL', `Copy failed: ${e.message}`);
                 }
                 continue;
             }
 
-            // Special handling for SVG copying if output is set to 'svg'
-            if (fileExt === 'svg' && customConfig && customConfig.output === 'svg') {
-                const outputFileName = fileName; // Keep original filename
-                const outputFilePath = path.join(targetDir, outputFileName);
-
-                console.log("\u001B[32m%s\u001B[0m", `Copying SVG (skip handling): ${normalizedRelativePath} -> ${outputFileName}`);
-                try {
-                    await fs.copyFile(filePath, outputFilePath);
-                    console.log("\u001B[32m%s\u001B[0m", `Saved: ${outputFilePath}`);
-                } catch (error) {
-                    console.error("\u001B[31m%s\u001B[0m", `Failed to copy ${normalizedRelativePath}:`, error.message);
-                }
-                continue;
-            }
-
-            // Attempt to get metadata from the image
+            // 4. Metadata and Format Verification (FEATURE RESTORED)
             let metadata;
             try {
                 metadata = await sharp(filePath).metadata();
             } catch (error) {
-                console.error("\u001B[31m%s\u001B[0m", `Metadata Error for ${normalizedRelativePath}: `, error.message);
+                // Now specifically logs the error message from Sharp (e.g., "Input file is of an unsupported image format")
+                log('red', 'ERROR', `Sharp cannot read ${normalizedRelativePath}: ${error.message}`);
                 continue;
             }
 
-            const detectedFormat = metadata.format ? metadata.format.toLowerCase() : 'unknown';
+            // FEATURE RESTORED: Extension vs Format Mismatch Check
+            const detectedFormat = metadata.format?.toLowerCase() || 'unknown';
+            const normalizedExt = (fileExt === 'jpg') ? 'jpeg' : fileExt;
+            const normalizedFormat = (detectedFormat === 'jpg') ? 'jpeg' : detectedFormat;
 
-            // Normalize jpg/jpeg for comparison
-            const normalizedExt = fileExt === 'jpg' ? 'jpeg' : fileExt;
-            const normalizedFormat = detectedFormat === 'jpg' ? 'jpeg' : detectedFormat;
-
-            if (normalizedExt !== normalizedFormat) {
-                console.warn("\u001B[31m%s\u001B[0m", `Warning: File extension (.${fileExt}) does not match detected format (${detectedFormat.toUpperCase()}) for file ${normalizedRelativePath}`);
-            } else {
-                console.log("\u001B[32m%s\u001B[0m", `File ${normalizedRelativePath} detected as ${detectedFormat.toUpperCase()} format.`);
+            if (normalizedExt !== normalizedFormat && detectedFormat !== 'unknown') {
+                log('yellow', 'MISMATCH', `${normalizedRelativePath} is .${fileExt} but detected as ${detectedFormat.toUpperCase()}`);
             }
 
-            // Extract the ID and title from the filename
+            // 5. Processing Logic
+            const supportedFormats = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'tiff', 'gif'];
+
+            if (!supportedFormats.includes(detectedFormat)) {
+                log('dim', 'SKIP', `Unsupported format (${detectedFormat.toUpperCase()}) for ${normalizedRelativePath}`);
+                continue;
+            }
+
+            // 6. Prepare Output Logic
             const nameParts = fileInfo.name.split('-Source-');
-            const id = nameParts[0]; // ID is the first part of the filename
-            const title = nameParts[1] ? nameParts[1] : ''; // Title is the second part after "-Source-" (if exists)
+            const id = nameParts[0];
+            const title = nameParts[1] || '';
 
-            // Filter supported image formats (excluding SVG)
-            const supportedFormats = ['png', 'jpg', 'jpeg', 'webp'];
-            if (supportedFormats.includes(metadata.format?.toLowerCase())) {
-                // Check for custom sizes
-                let sizes = customConfig ? customConfig.sizes : [];
+            const sizes = customConfig?.sizes || [];
+            const targetFormat = customConfig?.output || 'webp';
 
-                if (customConfig) {
-                     console.log("\u001B[36m%s\u001B[0m", `[Config Match] Found configuration for ${normalizedRelativePath}`);
-                } else {
-                     console.log("\u001B[33m%s\u001B[0m", `[No Config] No configuration found for ${normalizedRelativePath}, using default compression.`);
+            // Determine operations list (if no sizes, just one operation)
+            const operations = (sizes.length > 0) ? sizes : [0];
+
+            for (const size of operations) {
+                const targetWidth = size === 0 ? metadata.width : size;
+                const outputFileName = `${id}-${title}-x${targetWidth}.${targetFormat}`;
+                const outputFilePath = path.join(targetDir, outputFileName);
+
+                try {
+                    let pipeline = sharp(filePath);
+                    if (size !== 0) {
+                        pipeline = pipeline.resize({ width: size });
+                    }
+
+                    // Perform conversion and capture info
+                    const info = await pipeline
+                        .toFormat(targetFormat, { quality: 85 })
+                        .toFile(outputFilePath);
+
+                    // Structured log with size
+                    log('green', 'DONE', `${outputFileName} ${colors.dim}(${formatSize(info.size)})${colors.reset}`);
+
+                } catch (error) {
+                    log('red', 'FAIL', `Process error [${size}px] for ${normalizedRelativePath}: ${error.message}`);
                 }
-
-                // Determine target format (default to 'webp')
-                const targetFormat = (customConfig && customConfig.output) ? customConfig.output : 'webp';
-
-                // If no sizes are specified, compress the original image
-                if (!sizes || sizes.length === 0) {
-                    const outputFileName = `${id}-${title}-x${metadata.width}.${targetFormat}`;
-                    const outputFilePath = path.join(targetDir, outputFileName);
-
-                    console.log("\u001B[34m%s\u001B[0m", `Compressing ${normalizedRelativePath} -> ${outputFileName}`);
-                    try {
-                        await sharp(filePath)
-                            .toFormat(targetFormat, { quality: 85 })
-                            .toFile(outputFilePath);
-                        console.log("\u001B[32m%s\u001B[0m", `Saved: ${outputFilePath}`);
-                    } catch (error) {
-                        console.error("\u001B[31m%s\u001B[0m", `Failed to compress ${normalizedRelativePath}:`, error.message);
-                    }
-                } else {
-                    // Resize and compress images based on sizes
-                    for (const size of sizes) {
-                        const targetWidth = size === 0 ? metadata.width : size;
-                        const outputFileName = `${id}-${title}-x${targetWidth}.${targetFormat}`;
-                        const outputFilePath = path.join(targetDir, outputFileName);
-
-                        console.log("\u001B[34m%s\u001B[0m", `Processing ${normalizedRelativePath} -> ${outputFileName}`);
-                        try {
-                            let pipeline = sharp(filePath);
-                            if (size !== 0) {
-                                pipeline = pipeline.resize({ width: size });
-                            }
-
-                            await pipeline
-                                .toFormat(targetFormat, { quality: 85 })
-                                .toFile(outputFilePath);
-                            console.log("\u001B[32m%s\u001B[0m", `Saved: ${outputFilePath}`);
-                        } catch (error) {
-                            console.error("\u001B[31m%s\u001B[0m", `Failed to process ${normalizedRelativePath} at size ${size}:`, error.message);
-                        }
-                    }
-                }
-            } else {
-                // Handle WebP and SVG files (copying with correct naming)
-                //if (['webp', 'svg'].includes(metadata.format?.toLowerCase())) {
-                    const size = metadata.width;
-                    const fileExtension = `.${metadata.format?.toLowerCase()}`;
-                    const outputFileName = `${id}-${title}-x${size}${fileExtension}`;
-                    const outputFilePath = path.join(targetDir, outputFileName);
-
-                    console.log("\u001B[32m%s\u001B[0m", `Copying file: ${normalizedRelativePath} -> ${outputFileName}`);
-                    try {
-                        await fs.copyFile(filePath, outputFilePath);
-                        console.log("\u001B[32m%s\u001B[0m", `Saved: ${outputFilePath}`);
-                    } catch (error) {
-                        console.error("\u001B[31m%s\u001B[0m", `Failed to copy ${normalizedRelativePath}:`, error.message);
-                    }
-                    continue;
-                //}
             }
         }
 
-        console.log("\u001B[32m%s\u001B[0m", 'Conversion complete.');
+        console.log('---');
+        log('blue', 'END', `Output saved to: ${fullOutputDir}`);
+
     } catch (error) {
-        console.error("\u001B[31m%s\u001B[0m", 'Error during conversion:', error);
+        log('red', 'CRITICAL', `Unexpected error: ${error.message}`);
     }
 }
+
+/* :: :: Logic :: END :: */
+
+/* :: :: Function :: END :: */

@@ -1,6 +1,6 @@
 {
     "name": "@yggdrasil-au/ygg-webp",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "main": "Main.js",
     "type": "module",
     "bin": {
