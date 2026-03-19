@@ -34,6 +34,9 @@ public class Deployer
                 ctx.Status("Connected.");
             });
 
+            // SFTP Validation: ensure dirs are accessible and writable
+            await ValidateSftpAccess(sftp);
+
             // Pre-commands
             if (_config.PreCommands.Count > 0)
             {
@@ -253,6 +256,62 @@ public class Deployer
         }
 
         return normalized;
+    }
+
+    private async Task ValidateSftpAccess(SftpClient sftp)
+    {
+        var testContent = "test";
+        var testFileName = "deploy_validation_test.txt";
+
+        var targets = new List<string>();
+        if (!string.IsNullOrEmpty(_config.RemoteDir)) targets.Add(_config.RemoteDir);
+        if (!string.IsNullOrEmpty(_config.ArchiveDir)) targets.Add(_config.ArchiveDir);
+
+        foreach (var target in targets)
+        {
+            var dir = target.Replace('\\', '/').TrimEnd('/');
+            if (string.IsNullOrEmpty(dir)) continue;
+
+            await AnsiConsole.Status().StartAsync($"Validating SFTP access to {dir}...", async ctx =>
+            {
+                if (!sftp.Exists(dir))
+                {
+                    try { CreateRecursive(sftp, dir); } catch { /* Ignore */ }
+                }
+
+                var testPath = $"{dir}/{testFileName}";
+                try
+                {
+                    using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(testContent)))
+                    {
+                        sftp.UploadFile(ms, testPath);
+                    }
+                    sftp.DeleteFile(testPath);
+                    AnsiConsole.MarkupLine($"[grey]Validated SFTP write access to {dir}[/]");
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception($"SFTP Validation Failed for '{dir}'. Ensure directory exists and is writable.\nError: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    private void CreateRecursive(SftpClient sftp, string path)
+    {
+        var parts = path.TrimStart('/').Split('/');
+        var current = "";
+        if (path.StartsWith("/")) current = "/";
+
+        foreach (var part in parts)
+        {
+            if (string.IsNullOrEmpty(part)) continue;
+            current = (current == "" || current == "/") ? $"{current}{part}" : $"{current}/{part}";
+            if (!sftp.Exists(current))
+            {
+                sftp.CreateDirectory(current);
+            }
+        }
     }
 
     private string EscapeForBashDoubleQuotes(string value)
