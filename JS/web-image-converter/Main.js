@@ -5,7 +5,7 @@ import { convertImages } from './index.js';
 
     let inputDir = './source/assets/images/Source';       // Default directory containing the source images
     let outputDir = './source/assets/images/prod';     // Default directory where converted images will be saved
-    let configPath = './source/assets/images/webp.json'; // Default path to the JSON configuration file
+    let configPath = './source/assets/images/webp.yaml'; // Default path to the YAML configuration file
 
     for (let i = 0; i < args.length; i++) {
         switch (args[i]) {

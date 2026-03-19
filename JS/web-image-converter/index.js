@@ -1,14 +1,15 @@
 import sharp from 'sharp';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import yaml from 'js-yaml';
 
 /* :: :: Function :: START :: */
 
 /**
- * Convert images based on configuration from a JSON file.
+ * Convert images based on configuration from a JSON or YAML file.
  * @param {string} inputDir - Directory containing source images.
  * @param {string} outputDir - Directory to save converted images.
- * @param {string} configPath - Path to the JSON configuration file.
+ * @param {string} configPath - Path to the configuration file (YAML preferred).
  */
 export async function convertImages (
     inputDir,
@@ -57,6 +58,73 @@ export async function convertImages (
         return files.flat();
     }
 
+    /**
+     * Resolves {{placeholders}} using vars dictionary
+     */
+    function resolvePlaceholders (obj, vars) {
+        if (!vars || Object.keys(vars).length === 0) return obj;
+
+        function resolveString (str) {
+            // First check if the entire string is exactly ONE placeholder
+            const exactMatch = str.match(/^\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}$/);
+            if (exactMatch) {
+                const key = exactMatch[1];
+                const parts = key.split('.');
+                let current = vars;
+                let found = true;
+                for (const part of parts) {
+                    if (current && Object.prototype.hasOwnProperty.call(current, part)) {
+                        current = current[part];
+                    } else {
+                        found = false;
+                        break;
+                    }
+                }
+                if (found) {
+                    // Return the literal object/array/primitive
+                    return typeof current === 'object' && current !== null ? traverse(current) : current; 
+                }
+            }
+
+            // Otherwise, replace occurrences inside the string
+            return str.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (match, key) => {
+                const parts = key.split('.');
+                let current = vars;
+                for (const part of parts) {
+                    if (current && Object.prototype.hasOwnProperty.call(current, part)) {
+                        current = current[part];
+                    } else {
+                        return match; // Unresolved, return placeholder
+                    }
+                }
+                
+                if (typeof current === 'string' || typeof current === 'number' || typeof current === 'boolean') {
+                    return String(current);
+                }
+                return match;
+            });
+        }
+
+        function traverse (value) {
+            if (typeof value === 'string') {
+                return resolveString(value);
+            }
+            if (Array.isArray(value)) {
+                return value.map(item => traverse(item));
+            }
+            if (value !== null && typeof value === 'object') {
+                const result = {};
+                for (const [k, v] of Object.entries(value)) {
+                    result[k] = traverse(v);
+                }
+                return result;
+            }
+            return value;
+        }
+
+        return traverse(obj);
+    }
+
     /* :: :: Helpers :: END :: */
 
     // //
@@ -80,26 +148,44 @@ export async function convertImages (
 
         // 2. Configuration Loading
         let configData;
+        let conversionsData;
         try {
             const configFileContent = await fs.readFile(configPath, 'utf-8');
-            configData = JSON.parse(configFileContent);
+            
+            if (configPath.toLowerCase().endsWith('.json')) {
+                log('yellow', 'WARN', `Using .json configuration is deprecated. Please migrate to .yaml: ${configPath}`);
+                configData = JSON.parse(configFileContent);
+                conversionsData = configData;
+            } else {
+                configData = yaml.load(configFileContent);
+                
+                // If it's the new format with vars
+                if (configData && !Array.isArray(configData)) {
+                    const vars = configData.vars || {};
+                    const resolvedData = resolvePlaceholders(configData, vars);
+                    conversionsData = resolvedData.images || resolvedData.conversions || [];
+                } else {
+                    // It's a top-level array in Yaml
+                    conversionsData = configData;
+                }
+            }
         } catch (error) {
-            log('red', 'ERROR', `Failed to read or parse JSON config: ${error.message}`);
+            log('red', 'ERROR', `Failed to read or parse config file: ${error.message}`);
             return;
         }
 
-        if (!Array.isArray(configData) || configData.length === 0) {
-            log('yellow', 'WARN', `Configuration file is empty or invalid.`);
+        if (!Array.isArray(conversionsData) || conversionsData.length === 0) {
+            log('yellow', 'WARN', `Configuration images/conversions list is empty or invalid.`);
             return;
         }
 
-        // 3. FEATURE RESTORED: Verify files defined in JSON actually exist in source
-        for (const configEntry of configData) {
+        // 3. FEATURE RESTORED: Verify files defined in config actually exist in source
+        for (const configEntry of conversionsData) {
             const sourcePath = path.join(fullInputDir, configEntry.source);
             try {
                 await fs.access(sourcePath);
             } catch {
-                log('red', 'MISSING', `File defined in JSON not found: ${configEntry.source}`);
+                log('red', 'MISSING', `File defined in config not found: ${configEntry.source}`);
             }
         }
 
@@ -128,7 +214,7 @@ export async function convertImages (
             const fileName = fileInfo.base;
             const fileExt = fileInfo.ext.toLowerCase().replace('.', '');
 
-            const customConfig = configData.find(config => {
+            const customConfig = conversionsData.find(config => {
                 return config.source === normalizedRelativePath;
             });
 
