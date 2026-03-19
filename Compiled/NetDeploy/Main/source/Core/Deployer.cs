@@ -34,8 +34,18 @@ public class Deployer
                 ctx.Status("Connected.");
             });
 
+            // Re-connect to ensure session freshness (workaround for intermittent SftpPathNotFoundException on new dirs)
+            sftp.Disconnect();
+            sftp.Connect();
+
             // SFTP Validation: ensure dirs are accessible and writable
             await ValidateSftpAccess(sftp);
+
+            // Archive existing content if requested (In-place strategy only)
+            if (_config.ArchiveExisting == true && _config.Strategy != "symlink")
+            {
+                await ArchiveExistingContent(client, sftp);
+            }
 
             // Pre-commands
             if (_config.PreCommands.Count > 0)
@@ -68,6 +78,133 @@ public class Deployer
             if (client.IsConnected) client.Disconnect();
             if (sftp.IsConnected) sftp.Disconnect();
         }
+    }
+
+    private async Task ArchiveExistingContent(SshClient ssh, SftpClient sftp)
+    {
+        if (_config.ArchiveExisting != true || _config.Strategy == "symlink")
+        {
+            return;
+        }
+
+        string remoteDir = (_config.RemoteDir ?? string.Empty).TrimEnd('/');
+        string archiveDir = (_config.ArchiveDir ?? string.Empty).TrimEnd('/');
+        
+        if (string.IsNullOrEmpty(archiveDir))
+        {
+            archiveDir = $"{remoteDir}/../archive";
+        }
+
+        if (string.IsNullOrEmpty(remoteDir))
+        {
+            return;
+        }
+
+        if (!sftp.Exists(remoteDir))
+        {
+            AnsiConsole.MarkupLine("[grey]Remote directory does not exist, skipping archive.[/]");
+            return;
+        }
+
+        // Check if remoteDir has files to archive
+        List<Renci.SshNet.Sftp.ISftpFile> items = sftp.ListDirectory(remoteDir).Where(x => x.Name != "." && x.Name != "..").ToList();
+        int itemCountBefore = items.Count;
+        if (itemCountBefore == 0)
+        {
+            AnsiConsole.MarkupLine("[grey]Remote directory is empty, skipping archive.[/]");
+            return;
+        }
+
+        var ts = DateTime.Now.ToString("yyyyMMddHHmmss");
+        var targetArchive = $"{archiveDir}/{ts}";
+
+        // Ensure archive parent exists
+        if (!sftp.Exists(archiveDir))
+        {
+            CreateRecursive(sftp, archiveDir);
+        }
+
+        // Check if SSH shell is enabled
+        bool isSshEnabled = false;
+        try
+        {
+            var envResult = ssh.CreateCommand("env").Execute();
+            isSshEnabled = !envResult.Contains("not enabled");
+        }
+        catch
+        {
+            isSshEnabled = false;
+        }
+
+        if (isSshEnabled)
+        {
+            await ArchiveExistingContentSsh(ssh, targetArchive, remoteDir, itemCountBefore);
+        }
+        else
+        {
+            var choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[yellow]SSH Shell is disabled. How would you like to proceed with archiving? (SFTP is much slower for many files)[/]")
+                    .AddChoices("SFTP (Per-file move)", "Skip Archive"));
+
+            if (choice == "SFTP (Per-file move)")
+            {
+                await ArchiveExistingContentSftp(sftp, items, targetArchive, itemCountBefore);
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[yellow]Skipping archive...[/]");
+                return;
+            }
+        }
+
+        // Re-create the now-empty remoteDir if it was deleted/touched incorrectly by move
+        if (!sftp.Exists(remoteDir))
+        {
+            sftp.CreateDirectory(remoteDir);
+        }
+    }
+
+    private async Task ArchiveExistingContentSsh(SshClient ssh, string targetArchive, string remoteDir, int itemCountBefore)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Archiving {itemCountBefore} items to {targetArchive} via SSH (Fast move)...[/]");
+
+        // Use SSH mv for speed
+        RunCommand(ssh, $"mkdir -p \"{targetArchive}\" && mv \"{remoteDir}\"/* \"{targetArchive}/\" 2>/dev/null");
+
+        // Use SSH to check if archive is populated (SftpClient may have stale cache for just-created dirs)
+        var lsCmd = ssh.CreateCommand($"ls -A \"{targetArchive}\" | wc -l");
+        var lsResult = lsCmd.Execute();
+        var resultText = (lsResult ?? "").Trim();
+        if (!int.TryParse(resultText, out var count) || count == 0)
+        {
+            throw new Exception($"Archive verification failed: {targetArchive} appears empty after move (SSH Reported Count: {resultText}). Source items before move: {itemCountBefore}");
+        }
+
+        AnsiConsole.MarkupLine($"[green]Successfully archived {count} items (verified via SSH).[/]");
+    }
+
+    private async Task ArchiveExistingContentSftp(SftpClient sftp, List<Renci.SshNet.Sftp.ISftpFile> items, string targetArchive, int itemCountBefore)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Archiving {itemCountBefore} items to {targetArchive} via SFTP (Slower move)...[/]");
+
+        if (!sftp.Exists(targetArchive))
+        {
+            sftp.CreateDirectory(targetArchive);
+        }
+
+        await AnsiConsole.Status().StartAsync("Moving files via SFTP...", async ctx =>
+        {
+            int current = 0;
+            foreach (var item in items)
+            {
+                current++;
+                ctx.Status($"Moving {item.Name} ({current}/{itemCountBefore})...");
+                sftp.RenameFile(item.FullName, $"{targetArchive}/{item.Name}");
+            }
+        });
+
+        AnsiConsole.MarkupLine($"[green]Successfully archived {itemCountBefore} items via SFTP.[/]");
     }
 
     private async Task RunSymlinkStrategy(SshClient ssh, SftpClient sftp)

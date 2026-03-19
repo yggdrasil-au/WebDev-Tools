@@ -33,11 +33,32 @@ class Program
 
             profile.MergeDefaults(config.Defaults);
 
-            // Validation
+            // Validation & Warnings
             if (string.IsNullOrEmpty(profile.Host)) throw new Exception("Host is required");
             if (string.IsNullOrEmpty(profile.RemoteDir)) throw new Exception("RemoteDir is required");
             if (string.IsNullOrEmpty(profile.LocalDir)) throw new Exception("LocalDir is required");
             if (!Directory.Exists(profile.LocalDir)) throw new Exception($"Local directory '{profile.LocalDir}' does not exist");
+
+            if (string.IsNullOrEmpty(profile.Strategy)) 
+            {
+                AnsiConsole.MarkupLine("[yellow]Warning: 'strategy' not defined. Defaulting to 'inplace'.[/]");
+                profile.Strategy = "inplace";
+            }
+            if (string.IsNullOrEmpty(profile.Transfer))
+            {
+                AnsiConsole.MarkupLine("[yellow]Warning: 'transfer' not defined. Defaulting to 'sftp'.[/]");
+                profile.Transfer = "sftp";
+            }
+            if (profile.Port == null)
+            {
+                AnsiConsole.MarkupLine("[yellow]Warning: 'port' not defined. Defaulting to 22.[/]");
+                profile.Port = 22;
+            }
+
+            if (profile.ArchiveExisting == true && string.IsNullOrEmpty(profile.ArchiveDir))
+            {
+                 AnsiConsole.MarkupLine("[yellow]Warning: 'archiveExisting' is true but 'archiveDir' is not defined. Defaulting to '../archive' relative to RemoteDir.[/]");
+            }
 
             // Run Deployer
             var deployer = new Core.Deployer(profile);
