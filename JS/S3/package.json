@@ -12,7 +12,7 @@
     },
     "dependencies": {
 
-        "@aws-sdk/client-s3": "^3.980.0",
-        "sql.js": "^1.13.0"
+        "@aws-sdk/client-s3": "^3.1004.0",
+        "sql.js": "^1.14.1"
     }
 }

@@ -12,7 +12,7 @@
     "author": "Yggdrasil",
     "license": "ISC",
     "dependencies": {
-        "fs-extra": "^11.3.3",
-        "glob": "^13.0.0"
+        "fs-extra": "^11.3.4",
+        "glob": "^13.0.6"
     }
 }
