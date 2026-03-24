@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import * as http from 'node:http';
 import * as https from 'node:https';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { spawn } from 'node:child_process';
@@ -312,6 +313,115 @@ function parsePort (
     return parsedPort;
 }
 
+function wait (
+    durationMs: number
+): Promise<void> {
+    return new Promise<void>((resolve) => {
+        setTimeout(resolve, durationMs);
+    });
+}
+
+async function assertDocumentRootDirectory (
+    documentRootOption: string | undefined
+): Promise<string> {
+    const trimmedValue: string = (documentRootOption ?? '').trim();
+
+    if (!trimmedValue) {
+        throw new Error('The start command requires --document-root <path>.');
+    }
+
+    const resolvedDocumentRoot: string = path.resolve(trimmedValue);
+
+    let documentRootStats: fs.Stats;
+    try {
+        documentRootStats = await fsPromises.stat(resolvedDocumentRoot);
+    } catch (error: unknown) {
+        const errorCode: string | undefined = (error as NodeJS.ErrnoException).code;
+        if (errorCode === 'ENOENT') {
+            throw new Error(`Document root directory does not exist: ${resolvedDocumentRoot}`);
+        }
+
+        throw error;
+    }
+
+    if (!documentRootStats.isDirectory()) {
+        throw new Error(`Document root path is not a directory: ${resolvedDocumentRoot}`);
+    }
+
+    return resolvedDocumentRoot;
+}
+
+async function waitForRequestedPortBinding (
+    requestedPort: string,
+    apachePid: number,
+    maxAttempts: number = 120,
+    delayMs: number = 250
+): Promise<boolean> {
+    const portNumber: number = parsePort(requestedPort);
+
+    for (let attempt: number = 0; attempt < maxAttempts; attempt += 1) {
+        if (!isProcessAlive(apachePid)) {
+            return false;
+        }
+
+        const reachable: boolean = await isLocalhostPortReachable(portNumber);
+        if (reachable) {
+            return true;
+        }
+
+        await wait(delayMs);
+    }
+
+    return false;
+}
+
+async function isLocalhostPortReachable (
+    port: number
+): Promise<boolean> {
+    const reachableOnIpv4: boolean = await tryConnect('127.0.0.1', port);
+    if (reachableOnIpv4) {
+        return true;
+    }
+
+    return tryConnect('::1', port);
+}
+
+async function tryConnect (
+    host: string,
+    port: number,
+    timeoutMs: number = 300
+): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        const socket: net.Socket = net.createConnection({
+            host,
+            port,
+        });
+
+        let settled: boolean = false;
+
+        const finalize = (connected: boolean): void => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            socket.destroy();
+            resolve(connected);
+        };
+
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => {
+            finalize(true);
+        });
+        socket.once('timeout', () => {
+            finalize(false);
+        });
+        socket.once('error', () => {
+            finalize(false);
+        });
+    });
+}
+
 async function assertPortCanBeUsed (
     port: string
 ): Promise<void> {
@@ -420,12 +530,13 @@ program
     .option('--output', 'Run Apache in foreground and pipe output')
     .option('-p, --port <number>', 'Port to listen on', '8080')
     .option('-c, --config <path>', 'Path to custom Apache config directory')
-    .option('-d, --document-root <path>', 'Path to the website root directory')
+    .requiredOption('-d, --document-root <path>', 'Path to the website root directory')
     .action(async (options: StartOptions): Promise<void> => {
         let managedVHostId: string | null = null;
 
         try {
             const outputEnabled: boolean = Boolean(options.output);
+            const resolvedDocumentRoot: string = await assertDocumentRootDirectory(options.documentRoot);
 
             await assertRuntimeExists();
             await assertPortCanBeUsed(options.port);
@@ -435,13 +546,11 @@ program
             }
 
             const originalConf: string = await fsPromises.readFile(HTTPD_CONF_PATH, 'utf8');
-            let updatedConf: string = applyStartConfig(originalConf, options.port, coreListenPort);
+            let updatedConf: string = applyStartConfig(originalConf, options.port, coreListenPort, resolvedDocumentRoot);
             updatedConf = await mapUserConfigIncludes(updatedConf, options.config);
             await fsPromises.writeFile(HTTPD_CONF_PATH, updatedConf, 'utf8');
 
-            if (options.documentRoot) {
-                managedVHostId = await reserveManagedVHost(options.port, path.resolve(options.documentRoot));
-            }
+            managedVHostId = await reserveManagedVHost(options.port, resolvedDocumentRoot);
 
             const httpdExecutablePath: string = path.join(APACHE_DIR, 'bin', 'httpd.exe');
             if (!fs.existsSync(httpdExecutablePath)) {
@@ -459,16 +568,32 @@ program
                 throw new Error('Apache started without a valid PID.');
             }
 
+            const requestedPortBound: boolean = await waitForRequestedPortBinding(options.port, childPid);
+            if (!requestedPortBound) {
+                const running: boolean = isProcessAlive(childPid);
+
+                if (running) {
+                    try {
+                        await terminateProcessByPid(childPid);
+                    } catch (stopError: unknown) {
+                        console.error(`Failed to stop Apache process ${childPid} after port verification failure: ${formatUnknownError(stopError)}`);
+                    }
+                }
+
+                if (running) {
+                    throw new Error(`Apache process ${childPid} started, but requested port ${options.port} did not bind within startup timeout. Check Apache config and logs.`);
+                }
+
+                throw new Error(`Apache process ${childPid} exited before requested port ${options.port} became reachable. Check Apache output and logs.`);
+            }
+
             const processRecord: TrackedApacheProcess = {
                 pid: childPid,
                 startedAtIso: new Date().toISOString(),
                 port: options.port,
                 output: outputEnabled,
+                documentRoot: resolvedDocumentRoot,
             };
-
-            if (options.documentRoot) {
-                processRecord.documentRoot = path.resolve(options.documentRoot);
-            }
 
             if (options.config) {
                 processRecord.configDirectory = path.resolve(options.config);
@@ -488,7 +613,7 @@ program
 
             if (!outputEnabled) {
                 child.unref();
-                console.log(`Apache started in the background on port ${options.port} (PID ${childPid}).`);
+                console.log(`Apache started in the background. Requested port ${options.port}, core listener ${coreListenPort} (PID ${childPid}).`);
                 return;
             }
 
@@ -527,7 +652,7 @@ program
                 });
             }
 
-            console.log(`Apache started on port ${options.port} (PID ${childPid}). Press Enter to stop.`);
+            console.log(`Apache started. Requested port ${options.port}, core listener ${coreListenPort} (PID ${childPid}). Press Enter to stop.`);
 
             await new Promise<void>((resolve) => {
                 child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {

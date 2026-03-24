@@ -16,6 +16,9 @@ import {
 /* :: :: Apache Config Helpers :: START :: */
 
 const CORE_LISTEN_MARKER: string = '# Apache CLI managed core listener';
+const REQUESTED_LISTEN_MARKER: string = '# Apache CLI managed requested listener';
+const DOCUMENT_ROOT_MARKER_START: string = '# Apache CLI managed document root start';
+const DOCUMENT_ROOT_MARKER_END: string = '# Apache CLI managed document root end';
 
 function buildVHostHeader (): string {
     return [
@@ -82,9 +85,12 @@ export function applyBuildPreset (
 export function applyStartConfig (
     httpdConfContent: string,
     serverNamePort: string,
-    coreListenPort: number
+    coreListenPort: number,
+    documentRootPath: string
 ): string {
     let nextContent: string = setManagedCoreListenPort(httpdConfContent, coreListenPort);
+    nextContent = setManagedRequestedListenPort(nextContent, serverNamePort);
+    nextContent = setManagedDocumentRoot(nextContent, documentRootPath);
 
     if (/^#?ServerName\s+localhost:\d+/gm.test(nextContent)) {
         nextContent = nextContent.replace(/^#?ServerName\s+localhost:\d+/gm, `ServerName localhost:${serverNamePort}`);
@@ -95,6 +101,44 @@ export function applyStartConfig (
     }
 
     return nextContent;
+}
+
+function setManagedRequestedListenPort (
+    httpdConfContent: string,
+    requestedPort: string
+): string {
+    const managedLine: string = `${REQUESTED_LISTEN_MARKER}\nListen ${requestedPort}`;
+    const managedPattern: RegExp = new RegExp(`${REQUESTED_LISTEN_MARKER.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\nListen\\s+\\d+`, 'm');
+
+    if (managedPattern.test(httpdConfContent)) {
+        return httpdConfContent.replace(managedPattern, managedLine);
+    }
+
+    return `${httpdConfContent.trimEnd()}\n\n${managedLine}\n`;
+}
+
+function setManagedDocumentRoot (
+    httpdConfContent: string,
+    documentRootPath: string
+): string {
+    const safeDocumentRoot: string = normalizePathForApache(documentRootPath);
+    const managedBlock: string = [
+        DOCUMENT_ROOT_MARKER_START,
+        `DocumentRoot "${safeDocumentRoot}"`,
+        `<Directory "${safeDocumentRoot}">`,
+        '    AllowOverride None',
+        '    Require all granted',
+        '</Directory>',
+        DOCUMENT_ROOT_MARKER_END,
+    ].join('\n');
+
+    const managedPattern: RegExp = new RegExp(`${DOCUMENT_ROOT_MARKER_START.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}[\\s\\S]*?${DOCUMENT_ROOT_MARKER_END.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'm');
+
+    if (managedPattern.test(httpdConfContent)) {
+        return httpdConfContent.replace(managedPattern, managedBlock);
+    }
+
+    return `${httpdConfContent.trimEnd()}\n\n${managedBlock}\n`;
 }
 
 export function setManagedCoreListenPort (
