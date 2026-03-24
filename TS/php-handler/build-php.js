@@ -83,12 +83,17 @@ const postBuild = function postBuild() {
     // Step 2: Process webdist .html files -> .phtml + restore PHP
     const webFiles = findFiles(WEBDIST_DIR, '.html');
     for (const file of webFiles) {
-        let content = fs.readFileSync(file, 'utf8');
-        content = restorePHP(content);
-        const newPath = file.replace(/\.html$/, '.phtml');
-        fs.writeFileSync(newPath, content, 'utf8');
-        fs.unlinkSync(file);
-        console.log(`[PostBuild] Converted and restored PHP in ${newPath}`);
+        const originalContent = fs.readFileSync(file, 'utf8');
+        const restoredContent = restorePHP(originalContent);
+
+        if (originalContent !== restoredContent) {
+            const newPath = file.replace(/\.html$/, '.phtml');
+            fs.writeFileSync(newPath, restoredContent, 'utf8');
+            fs.unlinkSync(file);
+            console.log(`[PostBuild] Converted and restored PHP in ${newPath}`);
+        } else {
+            console.log(`[PostBuild] Skipped (no PHP tags) ${file}`);
+        }
     }
 
     // Step 3: Clean dist HTML files from PHP comments
