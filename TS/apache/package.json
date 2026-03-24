@@ -1,0 +1,25 @@
+{
+    "name": "@yggdrasil-au/apache-cli",
+    "version": "0.2.1",
+    "description": "Downloads, configures, and runs Apache with PHP runtime",
+    "type": "module",
+    "private": false,
+    "scripts": {
+        "start": "node ./dist/apache-cli.js start",
+        "apacheinstall": "node ./dist/apache-cli.js build",
+        "build": "tsc",
+        "preinstall": "pnpm build"
+    },
+    "bin": {
+        "apache-cli": "./dist/apache-cli.js"
+    },
+    "dependencies": {
+        "adm-zip": "^0.5.16",
+        "commander": "^14.0.1"
+    },
+    "devDependencies": {
+        "@types/adm-zip": "^0.5.7",
+        "@types/node": "^24.5.2",
+        "typescript": "^5.9.3"
+    }
+}
