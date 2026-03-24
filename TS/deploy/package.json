@@ -1,0 +1,31 @@
+
+{
+	"name": "@yggdrasil-au/deploy",
+	"version": "0.1.0",
+	"description": "Deployment utility with SSH, SFTP, tar, relay, and symlink strategies",
+	"type": "module",
+	"private": false,
+	"scripts": {
+		"build": "tsc",
+		"start": "node ./dist/index.js",
+        "preinstall": "pnpm build"
+	},
+	"bin": {
+		"deploy": "./dist/index.js"
+	},
+	"dependencies": {
+		"chalk": "^5.6.2",
+		"cli-progress": "^3.12.0",
+		"enquirer": "^2.4.1",
+		"ora": "^9.3.0",
+		"ssh2": "^1.17.0",
+		"tar": "^7.5.13",
+		"yaml": "^2.8.3"
+	},
+	"devDependencies": {
+		"@types/cli-progress": "^3.11.6",
+		"@types/node": "^25.5.0",
+		"@types/ssh2": "^1.15.5",
+		"typescript": "^6.0.2"
+	}
+}
