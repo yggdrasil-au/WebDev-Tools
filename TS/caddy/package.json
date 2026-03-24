@@ -1,4 +1,19 @@
 {
-    "name": "caddy"
-    
+    "name": "@yggdrasil-au/caddy",
+    "version": "0.1.0",
+    "description": "Downloads and runs Caddy with project-specific configuration.",
+    "type": "module",
+    "private": false,
+    "bin": {
+        "caddy-cli": "./caddy-cli.mjs"
+    },
+    "scripts": {
+        "postinstall": "node ./postinstall.mjs",
+        "start": "node ./caddy-cli.mjs start"
+    },
+    "engines": {
+        "node": ">=22.14.0"
+    },
+    "author": "Yggdrasil-au",
+    "license": "Apache-2.0"
 }

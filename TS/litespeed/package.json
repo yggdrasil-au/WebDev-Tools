@@ -1,0 +1,10 @@
+{
+    "name": "@yggdrasil-au/wlampctl-cli",
+    "version": "0.1.0",
+    "description": "Downloads and runs openlitespeed",
+    "type": "module",
+    "private": false,
+    "bin": {
+        "wlampctl-cli": "./wlampctl-cli.mjs"
+    }
+}
