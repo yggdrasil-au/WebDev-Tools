@@ -4,14 +4,15 @@ import chalk from "chalk";
 import cliProgress from "cli-progress";
 import type { SFTPWrapper } from "ssh2";
 
-import type { DeploymentProfile } from "../config.js";
+import type { DeploymentMode, DeploymentProfile } from "../config.js";
 import type { SshClient } from "../utils/ssh.js";
 import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.js";
 
 export class SftpDeployment {
     public constructor (
         private readonly config: DeploymentProfile,
-        private readonly localRoot: string
+        private readonly localPath: string,
+        private readonly mode: DeploymentMode
     ) {
         void this.config;
     }
@@ -24,13 +25,18 @@ export class SftpDeployment {
     ): Promise<void> {
         void ssh;
 
+        if (this.mode === "file") {
+            await this.uploadSingleFileAsync(sftp, files, remoteRoot);
+            return;
+        }
+
         const normalizedRemoteRoot: string = remoteRoot.replace(/\\/g, "/").replace(/\/$/, "");
         console.log(chalk.cyan(`Uploading ${files.length} files via SFTP...`));
 
         const directoriesToCreate: string[] = [...new Set(
             files
                 .map((filePath) => {
-                    const relativeDir: string = path.dirname(path.relative(this.localRoot, filePath)).replace(/\\/g, "/");
+                    const relativeDir: string = path.dirname(path.relative(this.localPath, filePath)).replace(/\\/g, "/");
                     return relativeDir === "." ? "" : relativeDir;
                 })
                 .filter((entry) => entry.length > 0)
@@ -53,7 +59,7 @@ export class SftpDeployment {
         progress.start(files.length, 0);
 
         for (const filePath of files) {
-            const relativePath: string = path.relative(this.localRoot, filePath).replace(/\\/g, "/");
+            const relativePath: string = path.relative(this.localPath, filePath).replace(/\\/g, "/");
             const remotePath: string = `${normalizedRemoteRoot}/${relativePath.replace(/^\//, "")}`;
 
             await sftpFastPut(sftp, filePath, remotePath);
@@ -62,4 +68,28 @@ export class SftpDeployment {
 
         progress.stop();
     }
+
+    /* :: :: Private Helpers :: START :: */
+
+    private async uploadSingleFileAsync(
+        sftp: SFTPWrapper,
+        files: string[],
+        remoteFilePath: string
+    ): Promise<void> {
+        if (files.length !== 1) {
+            throw new Error(`File mode expected exactly 1 file, got ${files.length}`);
+        }
+
+        const normalizedRemoteFilePath: string = remoteFilePath.replace(/\\/g, "/").replace(/\/$/, "");
+        const remoteDirectoryPath: string = path.posix.dirname(normalizedRemoteFilePath);
+
+        if (remoteDirectoryPath && remoteDirectoryPath !== "." && remoteDirectoryPath !== "/") {
+            await sftpCreateRecursive(sftp, remoteDirectoryPath);
+        }
+
+        console.log(chalk.cyan(`Uploading single file via SFTP to ${normalizedRemoteFilePath}...`));
+        await sftpFastPut(sftp, files[0], normalizedRemoteFilePath);
+    }
+
+    /* :: :: Private Helpers :: END :: */
 }

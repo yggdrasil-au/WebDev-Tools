@@ -1,11 +1,12 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import chalk from "chalk";
 import Enquirer from "enquirer";
 import ora from "ora";
 import type { ConnectConfig, SFTPWrapper } from "ssh2";
 
-import type { DeploymentProfile } from "../config.js";
+import { resolveDeploymentTarget, type DeploymentTarget, type DeploymentProfile } from "../config.js";
 import { DiffEngine } from "./DiffEngine.js";
 import { RelayDeployment } from "../strategies/RelayDeployment.js";
 import { SftpDeployment } from "../strategies/SftpDeployment.js";
@@ -31,6 +32,7 @@ export class Deployer {
     }
 
     public async runAsync(): Promise<void> {
+        const deploymentTarget: DeploymentTarget = this.getDeploymentTargetOrThrow();
         const connectionInfo: ConnectConfig = this.createConnectionInfo();
         const client = new SshClient(connectionInfo);
 
@@ -41,10 +43,14 @@ export class Deployer {
             const sftp = await client.connectSftp();
             spinner.succeed("Connected.");
 
-            await this.validateSftpAccess(sftp);
+            await this.validateSftpAccess(sftp, deploymentTarget);
 
             if (this.config.archiveExisting === true && this.config.strategy !== "symlink") {
-                await this.archiveExistingContent(client, sftp);
+                if (deploymentTarget.mode === "file") {
+                    await this.archiveExistingFile(sftp, deploymentTarget.remotePath);
+                } else {
+                    await this.archiveExistingContent(client, sftp, deploymentTarget.remotePath);
+                }
             }
 
             if (this.config.preCommands && this.config.preCommands.length > 0) {
@@ -55,12 +61,13 @@ export class Deployer {
             }
 
             if (this.config.strategy === "symlink") {
-                await this.runSymlinkStrategy(client, sftp);
-            } else {
-                if (!this.config.remoteDir) {
-                    throw new Error("RemoteDir is required for inplace strategy.");
+                if (deploymentTarget.mode === "file") {
+                    await this.runSymlinkFileStrategy(client, sftp, deploymentTarget);
+                } else {
+                    await this.runSymlinkDirectoryStrategy(client, sftp, deploymentTarget);
                 }
-                await this.uploadContent(client, sftp, this.config.remoteDir);
+            } else {
+                await this.uploadContent(client, sftp, deploymentTarget.remotePath, deploymentTarget);
             }
 
             if (this.config.postCommands && this.config.postCommands.length > 0) {
@@ -81,13 +88,10 @@ export class Deployer {
 
     private async archiveExistingContent(
         ssh: SshClient,
-        sftp: SFTPWrapper
+        sftp: SFTPWrapper,
+        remoteDirectoryPath: string
     ): Promise<void> {
-        if (this.config.archiveExisting !== true || this.config.strategy === "symlink") {
-            return;
-        }
-
-        const remoteDir: string = (this.config.remoteDir ?? "").replace(/\/$/, "");
+        const remoteDir: string = remoteDirectoryPath.replace(/\/$/, "");
         if (!remoteDir) {
             return;
         }
@@ -149,6 +153,34 @@ export class Deployer {
         }
     }
 
+    private async archiveExistingFile(
+        sftp: SFTPWrapper,
+        remoteFilePath: string
+    ): Promise<void> {
+        const normalizedRemoteFilePath: string = remoteFilePath.replace(/\\/g, "/").replace(/\/$/, "");
+        const remoteFileExists: boolean = await sftpStat(sftp, normalizedRemoteFilePath);
+
+        if (!remoteFileExists) {
+            console.log(chalk.gray("Remote file does not exist, skipping archive."));
+            return;
+        }
+
+        const timestamp: string = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+        let archiveTargetPath: string;
+
+        if (this.config.archiveDir) {
+            const normalizedArchiveDirectoryPath: string = this.config.archiveDir.replace(/\\/g, "/").replace(/\/$/, "");
+            await sftpCreateRecursive(sftp, normalizedArchiveDirectoryPath);
+            archiveTargetPath = `${normalizedArchiveDirectoryPath}/${path.posix.basename(normalizedRemoteFilePath)}.${timestamp}`;
+        } else {
+            archiveTargetPath = `${normalizedRemoteFilePath}.${timestamp}`;
+            console.log(chalk.yellow("archiveExisting fallback active: archiveDir was not set, so the current remote file will be renamed to '<remoteFile>.<timestamp>'."));
+        }
+
+        await sftpRename(sftp, normalizedRemoteFilePath, archiveTargetPath);
+        console.log(chalk.green(`Archived remote file to ${archiveTargetPath}`));
+    }
+
     private async archiveExistingContentSsh(
         ssh: SshClient,
         targetArchive: string,
@@ -199,11 +231,12 @@ export class Deployer {
 
     /* :: :: Strategies :: START :: */
 
-    private async runSymlinkStrategy(
+    private async runSymlinkDirectoryStrategy(
         ssh: SshClient,
-        sftp: SFTPWrapper
+        sftp: SFTPWrapper,
+        deploymentTarget: DeploymentTarget
     ): Promise<void> {
-        const remoteDir: string = (this.config.remoteDir ?? "").replace(/\/$/, "");
+        const remoteDir: string = deploymentTarget.remotePath.replace(/\/$/, "");
         if (!remoteDir) {
             throw new Error("RemoteDir is required for symlink strategy.");
         }
@@ -216,7 +249,7 @@ export class Deployer {
         const targetDir: string = `${releasesRoot}/${timestamp}`;
 
         await this.runCommand(ssh, `mkdir -p \"${targetDir}\"`);
-        await this.uploadContent(ssh, sftp, targetDir);
+        await this.uploadContent(ssh, sftp, targetDir, deploymentTarget);
 
         if (this.config.preserveFiles && this.config.preserveFiles.length > 0) {
             await this.preserveFilesFromPreviousRelease(ssh, remoteDir, targetDir);
@@ -226,13 +259,42 @@ export class Deployer {
         await this.runCommand(ssh, `ln -sfn \"${targetDir}\" \"${remoteDir}\"`);
     }
 
+    private async runSymlinkFileStrategy(
+        ssh: SshClient,
+        sftp: SFTPWrapper,
+        deploymentTarget: DeploymentTarget
+    ): Promise<void> {
+        const remoteFilePath: string = deploymentTarget.remotePath.replace(/\\/g, "/").replace(/\/$/, "");
+        const fileName: string = path.posix.basename(remoteFilePath);
+        const remoteParentPath: string = path.posix.dirname(remoteFilePath);
+        const releasesRoot: string = this.config.releasesDir ?? `${remoteParentPath}/releases-${fileName}`;
+        const timestamp: string = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+
+        const targetReleaseDirectoryPath: string = `${releasesRoot}/${timestamp}`;
+        const targetReleaseFilePath: string = `${targetReleaseDirectoryPath}/${fileName}`;
+
+        await this.runCommand(ssh, `mkdir -p \"${this.escapeForBashDoubleQuotes(targetReleaseDirectoryPath)}\"`);
+        await this.uploadContent(ssh, sftp, targetReleaseFilePath, deploymentTarget);
+
+        console.log(chalk.cyan("Updating symlink..."));
+        await this.runCommand(
+            ssh,
+            `ln -sfn \"${this.escapeForBashDoubleQuotes(targetReleaseFilePath)}\" \"${this.escapeForBashDoubleQuotes(remoteFilePath)}\"`
+        );
+
+        if (this.config.keepReleases && this.config.keepReleases > 0) {
+            await this.cleanupOldReleases(ssh, releasesRoot, this.config.keepReleases);
+        }
+    }
+
     private async uploadContent(
         ssh: SshClient,
         sftp: SFTPWrapper,
-        targetDir: string
+        targetPath: string,
+        deploymentTarget: DeploymentTarget
     ): Promise<void> {
-        const diffEngine = new DiffEngine(ssh, this.config.localDir ?? "");
-        const changedFiles: string[] = await diffEngine.getChangedFilesAsync(targetDir);
+        const diffEngine = new DiffEngine(ssh, deploymentTarget.localPath, deploymentTarget.mode);
+        const changedFiles: string[] = await diffEngine.getChangedFilesAsync(targetPath);
 
         if (changedFiles.length === 0) {
             console.log(chalk.green("No changes detected."));
@@ -242,19 +304,33 @@ export class Deployer {
         const transfer: string = this.config.transfer ?? "sftp";
 
         if (transfer === "relay") {
-            const strategy = new RelayDeployment(this.config, this.config.localDir ?? "");
-            await strategy.uploadAsync(changedFiles, targetDir);
+            const strategy = new RelayDeployment(this.config, deploymentTarget.localPath, deploymentTarget.mode);
+            await strategy.uploadAsync(changedFiles, targetPath);
             return;
         }
 
         if (transfer === "tar") {
-            const strategy = new TarDeployment(this.config, this.config.localDir ?? "");
-            await strategy.uploadAsync(ssh, sftp, changedFiles, targetDir);
+            const strategy = new TarDeployment(this.config, deploymentTarget.localPath, deploymentTarget.mode);
+            await strategy.uploadAsync(ssh, sftp, changedFiles, targetPath);
             return;
         }
 
-        const strategy = new SftpDeployment(this.config, this.config.localDir ?? "");
-        await strategy.uploadAsync(ssh, sftp, changedFiles, targetDir);
+        const strategy = new SftpDeployment(this.config, deploymentTarget.localPath, deploymentTarget.mode);
+        await strategy.uploadAsync(ssh, sftp, changedFiles, targetPath);
+    }
+
+    private async cleanupOldReleases(
+        ssh: SshClient,
+        releasesRoot: string,
+        keepReleases: number
+    ): Promise<void> {
+        const escapedReleasesRoot: string = this.escapeForBashDoubleQuotes(releasesRoot.replace(/\\/g, "/").replace(/\/$/, ""));
+        const cleanupCommand: string =
+            `if [ -d \"${escapedReleasesRoot}\" ]; then ` +
+            `ls -1dt \"${escapedReleasesRoot}\"/* 2>/dev/null | tail -n +${keepReleases + 1} | xargs -r rm -rf --; ` +
+            "fi";
+
+        await this.runCommand(ssh, cleanupCommand);
     }
 
     /* :: :: Strategies :: END :: */
@@ -408,11 +484,27 @@ export class Deployer {
             .replace(/`/g, "\\`");
     }
 
-    private async validateSftpAccess(sftp: SFTPWrapper): Promise<void> {
+    private getDeploymentTargetOrThrow(): DeploymentTarget {
+        const deploymentTarget: DeploymentTarget | null = resolveDeploymentTarget(this.config);
+
+        if (!deploymentTarget) {
+            throw new Error("Invalid deployment target. Define either localDir+remoteDir or localFile+remoteFile.");
+        }
+
+        return deploymentTarget;
+    }
+
+    private async validateSftpAccess(
+        sftp: SFTPWrapper,
+        deploymentTarget: DeploymentTarget
+    ): Promise<void> {
         const targets: string[] = [];
 
-        if (this.config.remoteDir) {
-            targets.push(this.config.remoteDir);
+        if (deploymentTarget.mode === "directory") {
+            targets.push(deploymentTarget.remotePath);
+        } else {
+            const parentPath: string = path.posix.dirname(deploymentTarget.remotePath.replace(/\\/g, "/").replace(/\/$/, ""));
+            targets.push(parentPath);
         }
 
         if (this.config.archiveDir) {

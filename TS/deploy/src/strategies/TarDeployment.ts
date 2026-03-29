@@ -7,9 +7,9 @@ import cliProgress from "cli-progress";
 import type { ConnectConfig, SFTPWrapper } from "ssh2";
 import * as tar from "tar";
 
-import type { DeploymentProfile } from "../config.js";
+import type { DeploymentMode, DeploymentProfile } from "../config.js";
 import type { SshClient } from "../utils/ssh.js";
-import { sftpFastPut } from "../utils/sftp.js";
+import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.js";
 import { SshClient as SshClientImpl } from "../utils/ssh.js";
 
 interface TarBatch {
@@ -20,7 +20,8 @@ interface TarBatch {
 export class TarDeployment {
     public constructor (
         private readonly config: DeploymentProfile,
-        private readonly localRoot: string
+        private readonly localPath: string,
+        private readonly mode: DeploymentMode
     ) {
     }
 
@@ -30,6 +31,11 @@ export class TarDeployment {
         files: string[],
         remoteRoot: string
     ): Promise<void> {
+        if (this.mode === "file") {
+            await this.uploadSingleFileAsync(sftp, files, remoteRoot);
+            return;
+        }
+
         void ssh;
         void sftp;
 
@@ -103,8 +109,8 @@ export class TarDeployment {
             const sftp = await client.connectSftp();
 
             batchBar.update(10, { label: chalk.yellow(`${batchLabel}: Compressing...`) });
-            const relativeFiles: string[] = batch.files.map((filePath) => path.relative(this.localRoot, filePath).replace(/\\/g, "/"));
-            await tar.create({ gzip: true, file: tempTarPath, cwd: this.localRoot }, relativeFiles);
+            const relativeFiles: string[] = batch.files.map((filePath) => path.relative(this.localPath, filePath).replace(/\\/g, "/"));
+            await tar.create({ gzip: true, file: tempTarPath, cwd: this.localPath }, relativeFiles);
             batchBar.update(40);
 
             const remoteTarPath: string = `${remoteRoot}/deploy-batch-${index}-${Date.now()}.tar.gz`;
@@ -188,6 +194,26 @@ export class TarDeployment {
         }
 
         return info;
+    }
+
+    private async uploadSingleFileAsync(
+        sftp: SFTPWrapper,
+        files: string[],
+        remoteFilePath: string
+    ): Promise<void> {
+        if (files.length !== 1) {
+            throw new Error(`File mode expected exactly 1 file, got ${files.length}`);
+        }
+
+        const normalizedRemoteFilePath: string = remoteFilePath.replace(/\\/g, "/").replace(/\/$/, "");
+        const remoteDirectoryPath: string = path.posix.dirname(normalizedRemoteFilePath);
+
+        if (remoteDirectoryPath && remoteDirectoryPath !== "." && remoteDirectoryPath !== "/") {
+            await sftpCreateRecursive(sftp, remoteDirectoryPath);
+        }
+
+        console.log(chalk.cyan("Tar transfer selected in file mode. Falling back to direct single-file SFTP upload."));
+        await sftpFastPut(sftp, files[0], normalizedRemoteFilePath);
     }
 
     /* :: :: Private Helpers :: END :: */

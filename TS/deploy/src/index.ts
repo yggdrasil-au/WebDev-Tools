@@ -6,7 +6,7 @@ import chalk from "chalk";
 import yaml from "yaml";
 
 import type { DeployConfig, DeploymentProfile } from "./config.js";
-import { mergeDefaults } from "./config.js";
+import { mergeDefaults, resolveDeploymentTarget } from "./config.js";
 import { Deployer } from "./core/Deployer.js";
 
 /* :: :: Entrypoint :: START :: */
@@ -159,18 +159,6 @@ function validateProfile(profile: DeploymentProfile): void {
         throw new Error("Host is required");
     }
 
-    if (!profile.remoteDir) {
-        throw new Error("RemoteDir is required");
-    }
-
-    if (!profile.localDir) {
-        throw new Error("LocalDir is required");
-    }
-
-    if (!fs.existsSync(profile.localDir)) {
-        throw new Error(`Local directory '${profile.localDir}' does not exist`);
-    }
-
     if (!profile.strategy) {
         console.log(chalk.yellow("Warning: 'strategy' not defined. Defaulting to 'inplace'."));
         profile.strategy = "inplace";
@@ -186,8 +174,67 @@ function validateProfile(profile: DeploymentProfile): void {
         profile.port = 22;
     }
 
-    if (profile.archiveExisting === true && !profile.archiveDir) {
-        console.log(chalk.yellow("Warning: 'archiveExisting' is true but 'archiveDir' is not defined. Defaulting to '../archive' relative to RemoteDir."));
+    const hasDirectoryFields: boolean = Boolean(profile.localDir || profile.remoteDir);
+    const hasFileFields: boolean = Boolean(profile.localFile || profile.remoteFile);
+
+    if (!hasDirectoryFields && !hasFileFields) {
+        throw new Error("Either (localDir + remoteDir) or (localFile + remoteFile) is required");
+    }
+
+    if (hasDirectoryFields && hasFileFields) {
+        throw new Error("Cannot mix directory mode (localDir/remoteDir) with file mode (localFile/remoteFile)");
+    }
+
+    if (hasDirectoryFields) {
+        if (!profile.localDir || !profile.remoteDir) {
+            throw new Error("Both localDir and remoteDir are required for directory mode");
+        }
+
+        if (!fs.existsSync(profile.localDir)) {
+            throw new Error(`Local directory '${profile.localDir}' does not exist`);
+        }
+
+        const localPathStats: fs.Stats = fs.statSync(profile.localDir);
+        if (!localPathStats.isDirectory()) {
+            throw new Error(`LocalDir '${profile.localDir}' must be a directory`);
+        }
+
+        if (profile.archiveExisting === true && !profile.archiveDir) {
+            console.log(chalk.yellow("Warning: 'archiveExisting' is true but 'archiveDir' is not defined. Defaulting to '../archive' relative to RemoteDir."));
+        }
+    } else {
+        if (!profile.localFile || !profile.remoteFile) {
+            throw new Error("Both localFile and remoteFile are required for file mode");
+        }
+
+        if (!fs.existsSync(profile.localFile)) {
+            throw new Error(`Local file '${profile.localFile}' does not exist`);
+        }
+
+        const localPathStats: fs.Stats = fs.statSync(profile.localFile);
+        if (!localPathStats.isFile()) {
+            throw new Error(`LocalFile '${profile.localFile}' must be a file`);
+        }
+
+        if (profile.remoteFile.endsWith("/")) {
+            throw new Error(`RemoteFile '${profile.remoteFile}' must not end with '/'`);
+        }
+
+        if (profile.preserveFiles && profile.preserveFiles.length > 0) {
+            console.log(chalk.yellow("Warning: 'preserveFiles' is ignored in file mode."));
+        }
+
+        if (profile.preserveDir) {
+            console.log(chalk.yellow("Warning: 'preserveDir' is ignored in file mode."));
+        }
+
+        if (profile.archiveExisting === true && !profile.archiveDir) {
+            console.log(chalk.yellow("Warning: 'archiveExisting' is true without 'archiveDir'. File mode defaults to renaming the current remote file to '<remoteFile>.<timestamp>'."));
+        }
+    }
+
+    if (!resolveDeploymentTarget(profile)) {
+        throw new Error("Invalid deployment target configuration. Provide either localDir+remoteDir or localFile+remoteFile.");
     }
 }
 

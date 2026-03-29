@@ -18,7 +18,9 @@ export interface DeploymentProfile {
     relayPrivateKeyPath?: string;
 
     localDir?: string;
+    localFile?: string;
     remoteDir?: string;
+    remoteFile?: string;
     releasesDir?: string;
     minRemoteDepth?: number;
 
@@ -37,6 +39,14 @@ export interface DeploymentProfile {
     postCommands?: string[];
     preserveFiles?: string[];
     preserveDir?: string;
+}
+
+export type DeploymentMode = "directory" | "file";
+
+export interface DeploymentTarget {
+    mode: DeploymentMode;
+    localPath: string;
+    remotePath: string;
 }
 
 /* :: :: Public Functions :: START :: */
@@ -61,8 +71,22 @@ export function mergeDefaults (
     profile.relayUsername ??= defaults.relayUsername;
     profile.relayPrivateKeyPath ??= defaults.relayPrivateKeyPath;
 
-    profile.localDir ??= defaults.localDir;
-    profile.remoteDir ??= defaults.remoteDir;
+    const hasFileFields: boolean = Boolean(profile.localFile || profile.remoteFile);
+    const hasDirectoryFields: boolean = Boolean(profile.localDir || profile.remoteDir);
+
+    if (hasFileFields && !hasDirectoryFields) {
+        profile.localFile ??= defaults.localFile;
+        profile.remoteFile ??= defaults.remoteFile;
+    } else if (hasDirectoryFields && !hasFileFields) {
+        profile.localDir ??= defaults.localDir;
+        profile.remoteDir ??= defaults.remoteDir;
+    } else {
+        profile.localDir ??= defaults.localDir;
+        profile.remoteDir ??= defaults.remoteDir;
+        profile.localFile ??= defaults.localFile;
+        profile.remoteFile ??= defaults.remoteFile;
+    }
+
     profile.releasesDir ??= defaults.releasesDir;
     profile.minRemoteDepth ??= defaults.minRemoteDepth ?? 2;
 
@@ -90,6 +114,31 @@ export function mergeDefaults (
     if (defaults.preserveFiles?.length && (!profile.preserveFiles || profile.preserveFiles.length === 0)) {
         profile.preserveFiles = [...defaults.preserveFiles];
     }
+}
+
+export function resolveDeploymentTarget(
+    profile: DeploymentProfile
+): DeploymentTarget | null {
+    const hasDirectoryPair: boolean = Boolean(profile.localDir && profile.remoteDir);
+    const hasFilePair: boolean = Boolean(profile.localFile && profile.remoteFile);
+
+    if (hasDirectoryPair && !hasFilePair) {
+        return {
+            mode: "directory",
+            localPath: profile.localDir as string,
+            remotePath: profile.remoteDir as string,
+        };
+    }
+
+    if (hasFilePair && !hasDirectoryPair) {
+        return {
+            mode: "file",
+            localPath: profile.localFile as string,
+            remotePath: profile.remoteFile as string,
+        };
+    }
+
+    return null;
 }
 
 /* :: :: Public Functions :: END :: */

@@ -1,0 +1,220 @@
+# Deploy Configuration Example (Full Field Coverage)
+# ==================================================================
+# This file demonstrates every currently supported key.
+#
+# Run:
+#   deploy --profile <name>
+#   deploy --<name>
+#
+# Config file lookup order at runtime:
+#   1) deploy.config.yaml
+#   2) deploy.config.yml
+#   3) deploy.config.json
+#
+# Important runtime behavior:
+# - If strategy is omitted, deploy defaults to "inplace".
+# - If transfer is omitted, deploy defaults to "sftp".
+# - If port is omitted, deploy defaults to 22.
+# - Unknown strategy strings are treated like "inplace" (no hard failure).
+# - Unknown transfer strings are treated like "sftp" (no hard failure).
+# - cleanRemote and minRemoteDepth are accepted keys but are not enforced
+#   by current runtime logic.
+# ==================================================================
+
+# ------------------------------------------------------------------
+# Optional template variables for substitution.
+# Any {{NAME}} used in this file must exist in vars or startup fails.
+# ------------------------------------------------------------------
+vars:
+    DEPLOY_HOST: 192.168.1.50
+    DEPLOY_USER: deployUser69
+    APP_ROOT: /var/www/myapp
+    RELAY_HOST: 10.0.0.20
+
+# ------------------------------------------------------------------
+# Global defaults merged into each profile.
+# Merge behavior note:
+# - preCommands/postCommands/preserveFiles from defaults are copied only
+#   when the profile does not define any values for those arrays.
+# - For target fields, avoid setting both directory and file defaults unless
+#   you intentionally want profiles to opt into one mode explicitly.
+# ------------------------------------------------------------------
+defaults:
+    # --------------------------------------------------------------
+    # Connection
+    # --------------------------------------------------------------
+    host: "{{DEPLOY_HOST}}"      # required
+    port: 22                     # optional, default 22 when omitted
+    username: "{{DEPLOY_USER}}"  # required for auth to work
+
+    # Auth precedence:
+    # 1) privateKeyPath (if file exists) -> key auth
+    # 2) password (fallback only if key missing/unreadable)
+    privateKeyPath: /absolute/path/to/id_ed25519
+    # passphrase: "optional-key-passphrase"
+    # password: "optional-password-fallback"
+
+    # --------------------------------------------------------------
+    # Relay transfer connection defaults (used only for transfer: relay)
+    # --------------------------------------------------------------
+    relayHost: "{{RELAY_HOST}}"                    # required when transfer=relay
+    relayPort: 22                                   # optional, default 22
+    relayUsername: "{{DEPLOY_USER}}"               # optional, falls back to username
+    relayPrivateKeyPath: /absolute/path/to/relay.pem # optional, falls back to privateKeyPath
+
+    # --------------------------------------------------------------
+    # Deployment target mode
+    # Exactly one mode must be active per profile:
+    # - Directory mode: localDir + remoteDir
+    # - File mode: localFile + remoteFile
+    # Mixing both modes in one profile is invalid.
+    # --------------------------------------------------------------
+    localDir: ./www
+    remoteDir: "{{APP_ROOT}}/site"
+
+    # File mode defaults are shown as comments to avoid accidental mixing.
+    # localFile: ./dist/app.js
+    # remoteFile: "{{APP_ROOT}}/assets/app.js"
+
+    # Accepted key, currently not enforced by runtime.
+    minRemoteDepth: 2
+
+    # --------------------------------------------------------------
+    # Deployment behavior
+    # strategy values: inplace | symlink
+    # transfer values: sftp | tar | relay
+    # --------------------------------------------------------------
+    strategy: inplace
+    transfer: sftp
+
+    # Tar options (effective for transfer=tar in directory mode)
+    # batchSizeMB: 50
+    # concurrency: 1
+
+    # Symlink options
+    # releasesDir default behavior:
+    # - directory mode: <remote parent>/releases
+    # - file mode: <remote parent>/releases-<filename>
+    # keepReleases currently only runs in symlink + file mode.
+    # releasesDir: "{{APP_ROOT}}/releases"
+    # keepReleases: 5
+
+    # Inplace archive options
+    archiveExisting: false
+    # archiveDir: "{{APP_ROOT}}/archive"
+
+    # Accepted key, currently not enforced by runtime.
+    cleanRemote: false
+
+    # Hooks
+    preCommands:
+        - echo "[deploy] pre-command from defaults"
+    postCommands:
+        - echo "[deploy] post-command from defaults"
+
+    # Preserve options (effective only in symlink + directory mode)
+    preserveFiles:
+        - storage/
+        - .env
+    # preserveDir: "{{APP_ROOT}}/shared"
+
+# ------------------------------------------------------------------
+# Profiles
+# ------------------------------------------------------------------
+deployments:
+    # --------------------------------------------------------------
+    # Basic production site (directory + inplace + sftp)
+    # --------------------------------------------------------------
+    production-site:
+        remoteDir: /var/www/production/html
+        archiveExisting: true
+        archiveDir: /var/www/production/archive
+        preCommands:
+            - echo "Starting production deploy"
+        postCommands:
+            - chown -R www-data:www-data /var/www/production/html
+
+    # --------------------------------------------------------------
+    # API backend (directory + symlink + tar)
+    # --------------------------------------------------------------
+    api-symlink:
+        localDir: ./dist/api
+        remoteDir: "{{APP_ROOT}}/api"
+        strategy: symlink
+        transfer: tar
+
+        releasesDir: "{{APP_ROOT}}/releases-api"
+        # keepReleases value is accepted for directory mode but cleanup
+        # currently executes only in symlink + file mode.
+        keepReleases: 5
+
+        preserveFiles:
+            - storage/
+            - database.sqlite
+            - .env
+        preserveDir: "{{APP_ROOT}}/shared"
+
+        batchSizeMB: 100
+        concurrency: 3
+
+        preCommands:
+            - echo "Preparing API deploy"
+        postCommands:
+            - systemctl restart my-api.service
+
+    # --------------------------------------------------------------
+    # Single-file deploy (file + symlink + sftp)
+    # --------------------------------------------------------------
+    web-worker-file:
+        localFile: ./dist/worker.js
+        remoteFile: /var/www/workers/worker.js
+        strategy: symlink
+        transfer: sftp
+        keepReleases: 10
+
+        # preserveFiles/preserveDir are ignored in file mode.
+        # preserveFiles:
+        #     - state.json
+
+    # --------------------------------------------------------------
+    # Relay deploy (directory + inplace + relay)
+    # --------------------------------------------------------------
+    relay-site:
+        transfer: relay
+        localDir: ./www
+        remoteDir: /var/www/relay-target/html
+        relayHost: 10.0.0.20
+        relayPort: 22
+        relayUsername: relay-user
+        relayPrivateKeyPath: /absolute/path/to/relay-key.pem
+
+        # Current relay implementation assumes key-based target auth because
+        # relay jump commands use ssh/scp with -i <temp-key>.
+        # Ensure privateKeyPath exists for target host auth.
+
+    # --------------------------------------------------------------
+    # Staging with omitted strategy/transfer/port to show auto defaults
+    # --------------------------------------------------------------
+    staging-auto-defaults:
+        host: 192.168.1.60
+        username: deploy
+        localDir: ./www
+        remoteDir: /var/www/staging/html
+        # strategy omitted -> runtime sets "inplace"
+        # transfer omitted -> runtime sets "sftp"
+        # port omitted -> runtime sets 22
+
+    # --------------------------------------------------------------
+    # Invalid examples (commented on purpose)
+    # --------------------------------------------------------------
+    # invalid-mixed-mode:
+    #     localDir: ./www
+    #     remoteDir: /var/www/html
+    #     localFile: ./dist/app.js
+    #     remoteFile: /var/www/html/app.js
+    #     # ERROR: cannot mix directory mode and file mode.
+
+    # invalid-file-remote:
+    #     localFile: ./dist/app.js
+    #     remoteFile: /var/www/html/
+    #     # ERROR: remoteFile must not end with '/'.
