@@ -1,9 +1,8 @@
-import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
 export async function pathExists(p) {
     try {
-        await fs.access(p)
+        await Deno.stat(p)
         return true
     } catch {
         return false
@@ -11,11 +10,17 @@ export async function pathExists(p) {
 }
 
 export async function ensureDir(dir) {
-    await fs.mkdir(dir, { recursive: true })
+    await Deno.mkdir(dir, { recursive: true })
 }
 
 export async function removePath(targetPath) {
-    await fs.rm(targetPath, { recursive: true, force: true })
+    try {
+        await Deno.remove(targetPath, { recursive: true })
+    } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) {
+            throw error
+        }
+    }
 }
 
 export async function emptyDir(dir) {
@@ -29,16 +34,10 @@ export async function copyPath(from, to, {
 } = {}) {
     await ensureDir(path.dirname(to))
 
-    if (typeof fs.cp === 'function') {
-        await fs.cp(from, to, { recursive: true, force: overwrite, dereference })
-        return
-    }
-
-    const st = await fs.lstat(from)
+    const st = await Deno.lstat(from)
     if (st.isDirectory()) {
         await ensureDir(to)
-        const entries = await fs.readdir(from, { withFileTypes: true })
-        for (const entry of entries) {
+        for await (const entry of Deno.readDir(from)) {
             const src = path.join(from, entry.name)
             const dst = path.join(to, entry.name)
             await copyPath(src, dst, { overwrite, dereference })
@@ -48,17 +47,25 @@ export async function copyPath(from, to, {
 
     if (st.isSymbolicLink()) {
         if (!dereference) {
-            const link = await fs.readlink(from)
-            try { await fs.unlink(to) } catch {}
-            await fs.symlink(link, to)
+            const link = await Deno.readLink(from)
+            if (overwrite) {
+                await removePath(to).catch(() => {})
+            }
+            await Deno.symlink(link, to)
             return
         }
-        const real = await fs.realpath(from)
-        await fs.copyFile(real, to)
+        const real = await Deno.realPath(from)
+        if (overwrite) {
+            await removePath(to).catch(() => {})
+        }
+        await Deno.copyFile(real, to)
         return
     }
 
-    await fs.copyFile(from, to)
+    if (overwrite) {
+        await removePath(to).catch(() => {})
+    }
+    await Deno.copyFile(from, to)
 }
 
 function shouldIncludeName(name, { includeDot }) {
@@ -77,8 +84,7 @@ export async function listTreeRelative(rootDir, {
     const stack = [{ abs: rootDir, rel: '' }]
     while (stack.length) {
         const { abs, rel } = stack.pop()
-        const entries = await fs.readdir(abs, { withFileTypes: true })
-        for (const entry of entries) {
+        for await (const entry of Deno.readDir(abs)) {
             if (!shouldIncludeName(entry.name, { includeDot })) continue
             const childAbs = path.join(abs, entry.name)
             const childRel = rel ? path.join(rel, entry.name) : entry.name

@@ -1,4 +1,3 @@
-import { promises as fs, watch as fsWatch } from 'node:fs'
 import path from 'node:path'
 import { runPackageScript } from './exec.mjs'
 
@@ -15,18 +14,16 @@ async function listDirsRecursive(baseDir) {
     const stack = [baseDir]
     while (stack.length) {
         const dir = stack.pop()
-        let entries = []
         try {
-            entries = await fs.readdir(dir, { withFileTypes: true })
+            for await (const entry of Deno.readDir(dir)) {
+                if (!entry.isDirectory()) continue
+                if (entry.name.startsWith('.')) continue
+                const child = path.join(dir, entry.name)
+                dirs.push(child)
+                stack.push(child)
+            }
         } catch {
             continue
-        }
-        for (const entry of entries) {
-            if (!entry.isDirectory()) continue
-            if (entry.name.startsWith('.')) continue
-            const child = path.join(dir, entry.name)
-            dirs.push(child)
-            stack.push(child)
         }
     }
     return dirs
@@ -35,41 +32,38 @@ async function listDirsRecursive(baseDir) {
 export async function ensureDirWatchers(baseDir, onEvent) {
     const watchers = new Map()
 
-    const watchDir = (dir) => {
+    const watchDir = (dir, recursive) => {
         if (watchers.has(dir)) return
         try {
-            const w = fsWatch(dir, { persistent: true }, (event, filename) => {
-                if (!filename) return
-                const full = path.join(dir, filename.toString())
-                if (event === 'rename') {
-                    fs.stat(full).then((st) => {
-                        if (st.isDirectory()) watchDir(full)
-                    }).catch(() => {})
+            const watcher = Deno.watchFs(dir, { recursive })
+            watchers.set(dir, watcher)
+
+            const consume = (async () => {
+                for await (const event of watcher) {
+                    const fullPath = event.paths[0]
+                    if (!fullPath) continue
+                    onEvent(event.kind, fullPath)
                 }
-                onEvent(event, full)
-            })
-            watchers.set(dir, w)
+            })()
+
+            consume.catch(() => {})
         } catch {
             // ignore
         }
     }
 
     try {
-        const w = fsWatch(baseDir, { persistent: true, recursive: true }, (event, filename) => {
-            if (!filename) return
-            onEvent(event, path.join(baseDir, filename.toString()))
-        })
-        watchers.set(baseDir, w)
+        watchDir(baseDir, true)
         return { mode: 'recursive', watchers }
     } catch {
         const dirs = await listDirsRecursive(baseDir)
-        for (const d of dirs) watchDir(d)
+        for (const d of dirs) watchDir(d, false)
         return { mode: 'multi-dir', watchers }
     }
 }
 
 export async function startSourceWatcher({
-    rootDir = process.cwd(),
+    rootDir = Deno.cwd(),
     sourceDir = 'source',
     debounceMs = 200,
     classifyChange = defaultClassifyChange,
@@ -85,7 +79,7 @@ export async function startSourceWatcher({
     }
 
     const sourceAbs = path.resolve(rootDir, sourceDir)
-    await fs.access(sourceAbs)
+    await Deno.stat(sourceAbs)
 
     let pendingTypes = new Set()
     const changedFiles = new Map([['scss', new Set()], ['ts', new Set()], ['astro', new Set()]])

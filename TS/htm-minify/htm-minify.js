@@ -6,8 +6,8 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import os from 'node:os'
 import readline from 'node:readline'
-import fg from 'fast-glob'
-import { minify } from 'html-minifier-terser'
+import fg from 'npm:fast-glob@^3.3.3'
+import { minify } from 'npm:html-minifier-terser@^7.2.0'
 
 const execAsync = promisify(exec)
 

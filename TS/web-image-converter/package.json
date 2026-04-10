@@ -9,9 +9,5 @@
     "keywords": [],
     "author": "",
     "license": "",
-    "description": "",
-    "dependencies": {
-        "js-yaml": "^4.1.1",
-        "sharp": "^0.34.5"
-    }
+    "description": ""
 }

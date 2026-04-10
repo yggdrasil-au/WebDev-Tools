@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
 import path from 'node:path'
-import fg from 'fast-glob'
-import { minify } from 'terser'
+import fg from 'npm:fast-glob@^3.3.3'
+import { minify } from 'npm:terser@^5.46.0'
 
 async function minifyOne(file, noSourcemap, deleteSource) {
     const mapPath = `${file}.map`

@@ -1,6 +1,9 @@
-import { spawn } from 'node:child_process';
 import { addStat } from './stats.js';
 import { injectVariables } from './config.js';
+
+const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
+const isWin = Deno.build.os === 'windows';
 
 /**
  * Executes a single shell command
@@ -12,20 +15,27 @@ function executeShell(command, envVars) {
         const cleanCommand = command.replace(/\n/g, ' ');
         console.log(`\x1b[36m> ${cleanCommand}\x1b[0m`);
 
-        const child = spawn(cleanCommand, {
-            shell: true,
-            stdio: 'inherit',
-            env: { ...process.env, ...(envVars ?? {}) }
-        });
+        try {
+            const child = new Deno.Command(isWin ? 'cmd' : 'sh', {
+                args: isWin ? ['/d', '/s', '/c', cleanCommand] : ['-c', cleanCommand],
+                cwd: Deno.cwd(),
+                env: envVars ? { ...Deno.env.toObject(), ...envVars } : Deno.env.toObject(),
+                stdin: 'null',
+                stdout: 'inherit',
+                stderr: 'inherit'
+            }).spawn();
 
-        child.on('close', (code) => {
-            const duration = Date.now() - start;
-            const status = code === 0 ? 'PASS' : 'FAIL';
-            addStat({ type: 'CMD', name: cleanCommand, duration, status });
+            child.status.then((result) => {
+                const duration = Date.now() - start;
+                const status = result.success ? 'PASS' : 'FAIL';
+                addStat({ type: 'CMD', name: cleanCommand, duration, status });
 
-            if (code === 0) resolve();
-            else reject(new Error(`Command failed with code ${code}`));
-        });
+                if (result.success) resolve();
+                else reject(new Error(`Command failed with code ${result.code}`));
+            }).catch(reject);
+        } catch (error) {
+            reject(error);
+        }
     });
 }
 

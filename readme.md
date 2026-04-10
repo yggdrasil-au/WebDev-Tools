@@ -22,3 +22,8 @@ This Repo contains various utility scripts and tools required by yggdrasil web p
 ## Usage
 
 Most tools are designed to be used as CLI utilities or imported into pnpm projects. Refer to the individual tools for more specific usage.
+
+## todo
+convert mjs and js to TS
+move to deno from node and pnpm where possible
+

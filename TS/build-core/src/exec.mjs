@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process'
+const textDecoder = new TextDecoder()
+const textEncoder = new TextEncoder()
 
-const isWin = process.platform === 'win32'
+const isWin = Deno.build.os === 'windows'
 
 function resolveBin(name) {
     if (!isWin) return name
@@ -12,44 +13,83 @@ function resolveBin(name) {
 
 function prefixStream(stream, prefix, write) {
     if (!stream) return
-    stream.setEncoding('utf8')
-    stream.on('data', (data) => {
-        const text = String(data).replace(/\r?\n/g, `\n${prefix}`)
-        write(prefix + text)
-    })
+
+    const reader = stream.getReader()
+    return (async () => {
+        let buffered = ''
+
+        try {
+            while (true) {
+                const { value, done } = await reader.read()
+                if (done) break
+
+                buffered += textDecoder.decode(value, { stream: true })
+                const lines = buffered.split(/\r?\n/)
+                buffered = lines.pop() ?? ''
+
+                for (const line of lines) {
+                    await write(textEncoder.encode(`${prefix}${line}\n`))
+                }
+            }
+
+            buffered += textDecoder.decode()
+            if (buffered.length > 0) {
+                await write(textEncoder.encode(`${prefix}${buffered}`))
+            }
+        } finally {
+            reader.releaseLock()
+        }
+    })()
 }
 
 export function runCommand(command, {
-    cwd = process.cwd(),
+    cwd = Deno.cwd(),
     env,
     shell = true,
     prefix,
     stdio = ['ignore', 'pipe', 'pipe'],
 } = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn(command, {
-            cwd,
-            env: env ? { ...process.env, ...env } : process.env,
-            shell,
-            stdio,
-        })
-
         const p = prefix ? `[${prefix}] ` : ''
-        if (p) {
-            prefixStream(child.stdout, p, (s) => process.stdout.write(s))
-            prefixStream(child.stderr, p, (s) => process.stderr.write(s))
-        }
 
-        child.on('close', (code) => {
-            if (code === 0) resolve()
-            else reject(new Error(`Command failed (code ${code}): ${command}`))
-        })
-        child.on('error', reject)
+        try {
+            const programSpec = shell
+                ? (isWin
+                    ? { program: 'cmd', args: ['/d', '/s', '/c', command] }
+                    : { program: 'sh', args: ['-c', command] })
+                : { program: command, args: [] }
+
+            const child = new Deno.Command(programSpec.program, {
+                args: programSpec.args,
+                cwd,
+                env: env ? { ...Deno.env.toObject(), ...env } : Deno.env.toObject(),
+                stdin: stdio[0] === 'inherit' ? 'inherit' : 'null',
+                stdout: p || stdio[1] === 'pipe' ? 'piped' : 'inherit',
+                stderr: p || stdio[2] === 'pipe' ? 'piped' : 'inherit',
+            }).spawn()
+
+            const statusPromise = child.status
+            const streamPromise = p
+                ? Promise.all([
+                    prefixStream(child.stdout, p, (bytes) => Deno.stdout.write(bytes)),
+                    prefixStream(child.stderr, p, (bytes) => Deno.stderr.write(bytes)),
+                ])
+                : Promise.resolve()
+
+            Promise.all([statusPromise, streamPromise])
+                .then(([status]) => {
+                    if (status.success) resolve()
+                    else reject(new Error(`Command failed (code ${status.code}): ${command}`))
+                })
+                .catch(reject)
+        } catch (error) {
+            reject(error)
+        }
     })
 }
 
 export function runPackageScript(scriptName, {
-    cwd = process.cwd(),
+    cwd = Deno.cwd(),
     packageManager = 'npm',
     env,
     prefix = scriptName,

@@ -1,7 +1,7 @@
-import sharp from 'sharp';
+import sharp from 'npm:sharp@^0.34.5';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import yaml from 'npm:js-yaml@^4.1.1';
 
 /* :: :: Function :: START :: */
 

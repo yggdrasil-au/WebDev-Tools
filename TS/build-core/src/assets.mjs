@@ -1,5 +1,4 @@
 import path from 'node:path'
-import { promises as fs } from 'node:fs'
 import {
     copyPath,
     emptyDir,
@@ -20,7 +19,7 @@ function defaultLogger(verbose) {
 }
 
 export function createAssetManager({
-    rootDir = process.cwd(),
+    rootDir = Deno.cwd(),
     srcWebRel = 'source/web',
     srcAssetsRel = 'source/assets',
     distRootRel = 'www/dist',
@@ -89,7 +88,10 @@ export function createAssetManager({
             return { hasContent: false, copied: [] }
         }
 
-        const topLevel = await fs.readdir(abs.srcWeb, { withFileTypes: true })
+        const topLevel = []
+        for await (const entry of Deno.readDir(abs.srcWeb)) {
+            topLevel.push(entry)
+        }
         const copied = []
         for (const entry of topLevel) {
             if (entry.name === '.gitkeep') continue
@@ -106,7 +108,10 @@ export function createAssetManager({
 
     async function removeSitemapsFromCapSync() {
         if (!(await pathExists(abs.capSync))) return 0
-        const entries = await fs.readdir(abs.capSync, { withFileTypes: true })
+        const entries = []
+        for await (const entry of Deno.readDir(abs.capSync)) {
+            entries.push(entry)
+        }
         let removed = 0
         for (const entry of entries) {
             if (!entry.isFile()) continue

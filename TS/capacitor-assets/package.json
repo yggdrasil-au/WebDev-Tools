@@ -79,18 +79,5 @@
     "tempy": "3.2.0",
     "ts-jest": "29.4.6",
     "typescript": "5.9.3"
-  },
-  "overrides": {
-    "@capacitor/cli": {
-      "plist": {
-        "@xmldom/xmldom": "0.8.4"
-      }
-    },
-    "@trapezedev/project": {
-      "@xmldom/xmldom": "0.8.11",
-      "mergexml": {
-        "@xmldom/xmldom": "0.7.7"
-      }
-    }
   }
 }

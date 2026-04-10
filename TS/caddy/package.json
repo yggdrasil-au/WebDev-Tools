@@ -1,6 +1,6 @@
 {
     "name": "@yggdrasil-au/caddy",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Downloads and runs Caddy with project-specific configuration.",
     "type": "module",
     "private": false,
@@ -8,11 +8,8 @@
         "caddy-cli": "./caddy-cli.mjs"
     },
     "scripts": {
-        "postinstall": "node ./postinstall.mjs",
-        "start": "node ./caddy-cli.mjs start"
-    },
-    "engines": {
-        "node": ">=22.14.0"
+        "postinstall": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write ./postinstall.mjs",
+        "start": "deno run --allow-env --allow-read --allow-run ./caddy-cli.mjs start"
     },
     "author": "Yggdrasil-au",
     "license": "Apache-2.0"

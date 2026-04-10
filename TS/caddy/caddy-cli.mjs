@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env deno
 
-import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 
 import { getExecutablePath } from "./lib/runtime-paths.mjs";
+
+const textDecoder = new TextDecoder();
 
 /* :: :: Helpers :: START :: */
 
@@ -52,7 +52,20 @@ function resolveAbsolutePath (inputPath) {
     if (!inputPath) {
         return "";
     }
-    return path.resolve(process.cwd(), inputPath);
+    return path.resolve(Deno.cwd(), inputPath);
+}
+
+async function pathExists (inputPath) {
+    try {
+        await Deno.stat(inputPath);
+        return true;
+    } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+            return false;
+        }
+
+        throw error;
+    }
 }
 
 function validatePort (portValue) {
@@ -78,7 +91,7 @@ function buildRunArguments (configPath) {
 
 /* :: :: Commands :: START :: */
 
-function startServer (args) {
+async function startServer (args) {
     const flags = parseFlags(args);
 
     const configPath = resolveAbsolutePath(flags.ConfigFile);
@@ -90,17 +103,17 @@ function startServer (args) {
     if (!documentRoot) {
         throw new Error("Missing required flag: --DocumentRoot");
     }
-    if (!fs.existsSync(configPath)) {
+    if (!await pathExists(configPath)) {
         throw new Error(`Config file not found: ${configPath}`);
     }
-    if (!fs.existsSync(documentRoot)) {
+    if (!await pathExists(documentRoot)) {
         throw new Error(`Document root not found: ${documentRoot}`);
     }
 
     const port = validatePort(flags.port ?? "8080");
 
     const caddyPath = getExecutablePath();
-    if (!fs.existsSync(caddyPath)) {
+    if (!await pathExists(caddyPath)) {
         throw new Error([
             `Caddy binary not found: ${caddyPath}`,
             "Run installation again to trigger postinstall download.",
@@ -109,28 +122,21 @@ function startServer (args) {
 
     const runArgs = buildRunArguments(configPath);
 
-    const child = spawn(caddyPath, runArgs, {
-        cwd: process.cwd(),
+    const child = new Deno.Command(caddyPath, {
+        args: runArgs,
+        cwd: Deno.cwd(),
         env: {
-            ...process.env,
+            ...Deno.env.toObject(),
             DOCUMENT_ROOT: documentRoot,
             PORT: port,
         },
-        stdio: flags.output ? "inherit" : "pipe",
-    });
+        stdin: "inherit",
+        stdout: flags.output ? "inherit" : "null",
+        stderr: flags.output ? "inherit" : "null",
+    }).spawn();
 
-    child.on("error", (error) => {
-        console.error(`[caddy-cli] failed to start caddy: ${error.message}`);
-        process.exitCode = 1;
-    });
-
-    child.on("exit", (code, signal) => {
-        if (signal) {
-            process.exitCode = 1;
-            return;
-        }
-        process.exitCode = code ?? 0;
-    });
+    const status = await child.status;
+    return status.success ? 0 : (status.code ?? 1);
 }
 
 /* :: :: Commands :: END :: */
@@ -139,9 +145,9 @@ function startServer (args) {
 
 /* :: :: Main :: START :: */
 
-function main () {
-    const command = process.argv[2];
-    const args = process.argv.slice(3);
+async function main () {
+    const command = Deno.args[0];
+    const args = Deno.args.slice(1);
 
     if (!command || command === "--help" || command === "-h") {
         printUsage();
@@ -150,7 +156,10 @@ function main () {
 
     switch (command) {
         case "start": {
-            startServer(args);
+            const exitCode = await startServer(args);
+            if (exitCode !== 0) {
+                Deno.exit(exitCode);
+            }
             break;
         }
         default: {
@@ -160,11 +169,11 @@ function main () {
 }
 
 try {
-    main();
+    await main();
 } catch (error) {
     console.error(`[caddy-cli] ${error instanceof Error ? error.message : String(error)}`);
     printUsage();
-    process.exitCode = 1;
+    Deno.exit(1);
 }
 
 /* :: :: Main :: END :: */

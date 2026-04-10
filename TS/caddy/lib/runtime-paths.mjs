@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,15 +15,15 @@ const RUNTIME_DIR = path.join(PACKAGE_ROOT, ".runtime");
 /* :: :: Exports :: START :: */
 
 export function getExecutableNameForPlatform () {
-    return process.platform === "win32" ? "caddy.exe" : "caddy";
+    return Deno.build.os === "windows" ? "caddy.exe" : "caddy";
 }
 
 export function getExecutablePath () {
     return path.join(RUNTIME_DIR, getExecutableNameForPlatform());
 }
 
-export function ensureRuntimeDir () {
-    fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+export async function ensureRuntimeDir () {
+    await Deno.mkdir(RUNTIME_DIR, { recursive: true });
 }
 
 export function getRuntimeDir () {

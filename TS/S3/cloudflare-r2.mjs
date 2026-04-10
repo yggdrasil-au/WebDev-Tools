@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from 'npm:@aws-sdk/client-s3@^3.1004.0';
 
 /**
  * Cloudflare R2 upload helper.

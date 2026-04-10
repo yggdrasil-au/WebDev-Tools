@@ -1,8 +1,20 @@
-import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import yaml from 'npm:js-yaml@^4.1.1';
 import { CWD, CONFIG_FILES } from './constants.js';
 import { flattenVariables, isPlainObject, getValueByPath } from './utils.js';
+
+async function pathExists(filePath) {
+    try {
+        await Deno.stat(filePath);
+        return true;
+    } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+            return false;
+        }
+        throw error;
+    }
+}
 
 /**
  * Resolves {{placeholders}} inside the merged vars tree.
@@ -209,11 +221,11 @@ function resolveVarsPlaceholders(rootData) {
  * Loads and resolves variables from vars.yaml and its referenced sources
  */
 export async function loadVariables() {
-    if (!fs.existsSync(CONFIG_FILES.vars)) {
+    if (!(await pathExists(CONFIG_FILES.vars))) {
         return {};
     }
 
-    const rawConfig = yaml.load(fs.readFileSync(CONFIG_FILES.vars, 'utf8')) || {};
+    const rawConfig = yaml.load(await Deno.readTextFile(CONFIG_FILES.vars)) || {};
     const mergedData = {};
 
     // 1. Process "sources" (external files)
@@ -221,16 +233,16 @@ export async function loadVariables() {
         for (const [scope, filePath] of Object.entries(rawConfig.sources)) {
             const absolutePath = path.resolve(CWD, filePath);
 
-            if (!fs.existsSync(absolutePath)) {
+            if (!(await pathExists(absolutePath))) {
                 console.warn(`[yaml-run] Warning: Source file not found: ${filePath}`);
                 continue;
             }
 
             if (absolutePath.endsWith('.json')) {
-                mergedData[scope] = JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
+                mergedData[scope] = JSON.parse(await Deno.readTextFile(absolutePath));
             } else if (absolutePath.endsWith('.js') || absolutePath.endsWith('.mjs')) {
                 // Dynamic import for JS files
-                const mod = await import(`file://${absolutePath}`);
+                const mod = await import(pathToFileURL(absolutePath).href);
                 mergedData[scope] = mod.default || mod;
             }
         }

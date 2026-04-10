@@ -9,10 +9,5 @@
     "type": "module",
     "exports": {
         ".": "./index.js"
-    },
-    "dependencies": {
-
-        "@aws-sdk/client-s3": "^3.1004.0",
-        "sql.js": "^1.14.1"
     }
 }

@@ -7,13 +7,9 @@
         "yaml-run": "./main.js"
     },
     "scripts": {
+        "start": "deno run --allow-env --allow-read --allow-run ./main.js",
+        "check": "deno check ./main.js",
         "test": "echo \"Error: no test specified\" && exit 1"
-    },
-    "dependencies": {
-        "js-yaml": "^4.1.1"
-    },
-    "engines": {
-        "node": ">=18.0.0"
     },
     "author": "Yggdrasil-au",
     "license": "Apache-2.0"

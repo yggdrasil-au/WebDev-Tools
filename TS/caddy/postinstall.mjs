@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import https from "node:https";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 import {
     ensureRuntimeDir,
@@ -16,12 +13,13 @@ import {
 const CADDY_VERSION = "2.11.2";
 const RELEASE_BASE_URL = `https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}`;
 const CHECKSUMS_URL = `${RELEASE_BASE_URL}/caddy_${CADDY_VERSION}_checksums.txt`;
+const textDecoder = new TextDecoder();
 
 const TARGET_ASSETS = {
-    "win32:x64": `caddy_${CADDY_VERSION}_windows_amd64.zip`,
-    "win32:arm64": `caddy_${CADDY_VERSION}_windows_arm64.zip`,
-    "linux:x64": `caddy_${CADDY_VERSION}_linux_amd64.tar.gz`,
-    "linux:arm64": `caddy_${CADDY_VERSION}_linux_arm64.tar.gz`,
+    "windows:x86_64": `caddy_${CADDY_VERSION}_windows_amd64.zip`,
+    "windows:aarch64": `caddy_${CADDY_VERSION}_windows_arm64.zip`,
+    "linux:x86_64": `caddy_${CADDY_VERSION}_linux_amd64.tar.gz`,
+    "linux:aarch64": `caddy_${CADDY_VERSION}_linux_arm64.tar.gz`,
 };
 
 /* :: :: Constants :: END :: */
@@ -38,79 +36,74 @@ function logWarning (message) {
     console.warn(`[caddy-cli postinstall] warning: ${message}`);
 }
 
+function getPlatformKey () {
+    return `${Deno.build.os}:${Deno.build.arch}`;
+}
+
 function getTargetAssetName () {
-    const key = `${process.platform}:${process.arch}`;
+    const key = getPlatformKey();
     return TARGET_ASSETS[key] ?? null;
 }
 
-function downloadText (url) {
-    return new Promise((resolve, reject) => {
-        const request = https.get(url, (response) => {
-            if (response.statusCode && response.statusCode >= 400) {
-                reject(new Error(`HTTP ${response.statusCode} while downloading text from ${url}`));
-                return;
-            }
+async function pathExists (inputPath) {
+    try {
+        await Deno.stat(inputPath);
+        return true;
+    } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+            return false;
+        }
 
-            if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                resolve(downloadText(response.headers.location));
-                return;
-            }
-
-            let content = "";
-            response.setEncoding("utf8");
-            response.on("data", (chunk) => {
-                content += chunk;
-            });
-            response.on("end", () => {
-                resolve(content);
-            });
-        });
-
-        request.on("error", (error) => {
-            reject(error);
-        });
-    });
+        throw error;
+    }
 }
 
-function downloadFile (url, destinationPath) {
-    return new Promise((resolve, reject) => {
-        const request = https.get(url, (response) => {
-            if (response.statusCode && response.statusCode >= 400) {
-                reject(new Error(`HTTP ${response.statusCode} while downloading ${url}`));
-                return;
-            }
+async function downloadText (url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} while downloading text from ${url}`);
+    }
 
-            if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                resolve(downloadFile(response.headers.location, destinationPath));
-                return;
-            }
-
-            const fileStream = fs.createWriteStream(destinationPath);
-            response.pipe(fileStream);
-
-            fileStream.on("finish", () => {
-                fileStream.close(() => resolve());
-            });
-            fileStream.on("error", (error) => {
-                reject(error);
-            });
-        });
-
-        request.on("error", (error) => {
-            reject(error);
-        });
-    });
+    return await response.text();
 }
 
-function hashFile (filePath, algorithm) {
-    return new Promise((resolve, reject) => {
-        const hash = crypto.createHash(algorithm);
-        const stream = fs.createReadStream(filePath);
+async function downloadFile (url, destinationPath) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} while downloading ${url}`);
+    }
 
-        stream.on("data", (chunk) => hash.update(chunk));
-        stream.on("end", () => resolve(hash.digest("hex")));
-        stream.on("error", (error) => reject(error));
+    const body = response.body;
+    if (!body) {
+        throw new Error(`Empty response while downloading ${url}`);
+    }
+
+    const file = await Deno.open(destinationPath, {
+        create: true,
+        write: true,
+        truncate: true,
     });
+
+    try {
+        await body.pipeTo(file.writable);
+    } finally {
+        file.close();
+    }
+}
+
+async function hashFile (filePath, algorithm) {
+    const hash = crypto.createHash(algorithm);
+    const file = await Deno.open(filePath, { read: true });
+
+    try {
+        for await (const chunk of file.readable) {
+            hash.update(chunk);
+        }
+    } finally {
+        file.close();
+    }
+
+    return hash.digest("hex");
 }
 
 function parseChecksumForAsset (checksumsText, assetName) {
@@ -148,50 +141,54 @@ function getHashAlgorithmFromDigestLength (digestLength) {
     }
 }
 
-function extractArchive (archivePath, targetDir, assetName) {
+async function runCommand (command, args) {
+    const result = await new Deno.Command(command, {
+        args,
+        stderr: "piped",
+        stdout: "piped",
+    }).output();
+
+    if (!result.success) {
+        const stderr = textDecoder.decode(result.stderr).trim();
+        const stdout = textDecoder.decode(result.stdout).trim();
+        throw new Error(stderr || stdout || `Command failed: ${command}`);
+    }
+}
+
+async function extractArchive (archivePath, targetDir, assetName) {
     const extractDir = path.join(targetDir, `extract-${Date.now()}`);
-    fs.mkdirSync(extractDir, { recursive: true });
+    await Deno.mkdir(extractDir, { recursive: true });
 
-    if (assetName.endsWith(".zip")) {
-        const psScript = [
-            "$ErrorActionPreference = 'Stop'",
-            `Expand-Archive -Path '${archivePath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`,
-        ].join("; ");
+    try {
+        if (assetName.endsWith(".zip")) {
+            const psScript = [
+                "$ErrorActionPreference = 'Stop'",
+                `Expand-Archive -Path '${archivePath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`,
+            ].join("; ");
 
-        const result = spawnSync("powershell", ["-NoProfile", "-Command", psScript], {
-            stdio: "pipe",
-            encoding: "utf8",
-        });
-
-        if (result.status !== 0) {
-            throw new Error(`Zip extraction failed: ${result.stderr || result.stdout}`);
+            await runCommand("powershell", ["-NoProfile", "-Command", psScript]);
+        } else if (assetName.endsWith(".tar.gz")) {
+            await runCommand("tar", ["-xzf", archivePath, "-C", extractDir]);
+        } else {
+            throw new Error(`Unsupported archive type for ${assetName}`);
         }
-    } else if (assetName.endsWith(".tar.gz")) {
-        const result = spawnSync("tar", ["-xzf", archivePath, "-C", extractDir], {
-            stdio: "pipe",
-            encoding: "utf8",
-        });
 
-        if (result.status !== 0) {
-            throw new Error(`Tar extraction failed: ${result.stderr || result.stdout}`);
+        const extractedExecutablePath = path.join(extractDir, getExecutableNameForPlatform());
+        if (!await pathExists(extractedExecutablePath)) {
+            throw new Error(`Archive did not contain ${getExecutableNameForPlatform()}`);
         }
-    } else {
-        throw new Error(`Unsupported archive type for ${assetName}`);
+
+        const finalExecutablePath = getExecutablePath();
+        await Deno.copyFile(extractedExecutablePath, finalExecutablePath);
+
+        if (Deno.build.os !== "windows") {
+            await Deno.chmod(finalExecutablePath, 0o755);
+        }
+
+        logInfo(`Caddy is ready: ${getExecutablePath()}`);
+    } finally {
+        await Deno.remove(extractDir, { recursive: true, force: true });
     }
-
-    const extractedExecutablePath = path.join(extractDir, getExecutableNameForPlatform());
-    if (!fs.existsSync(extractedExecutablePath)) {
-        throw new Error(`Archive did not contain ${getExecutableNameForPlatform()}`);
-    }
-
-    const finalExecutablePath = getExecutablePath();
-    fs.copyFileSync(extractedExecutablePath, finalExecutablePath);
-
-    if (process.platform !== "win32") {
-        fs.chmodSync(finalExecutablePath, 0o755);
-    }
-
-    fs.rmSync(extractDir, { recursive: true, force: true });
 }
 
 /* :: :: Helpers :: END :: */
@@ -202,24 +199,24 @@ function extractArchive (archivePath, targetDir, assetName) {
 
 async function main () {
     try {
-        ensureRuntimeDir();
+        await ensureRuntimeDir();
 
         const executablePath = getExecutablePath();
-        if (fs.existsSync(executablePath)) {
+        if (await pathExists(executablePath)) {
             logInfo(`Caddy binary already present at ${executablePath}. Skipping download.`);
             return;
         }
 
         const assetName = getTargetAssetName();
         if (!assetName) {
-            logInfo(`Platform ${process.platform}/${process.arch} is not in supported auto-download targets. Skipping.`);
+            logInfo(`Platform ${Deno.build.os}/${Deno.build.arch} is not in supported auto-download targets. Skipping.`);
             return;
         }
 
         const archivePath = path.join(getRuntimeDir(), assetName);
         const archiveUrl = `${RELEASE_BASE_URL}/${assetName}`;
 
-        logInfo(`Downloading ${assetName} for ${process.platform}/${process.arch}...`);
+        logInfo(`Downloading ${assetName} for ${Deno.build.os}/${Deno.build.arch}...`);
         await downloadFile(archiveUrl, archivePath);
 
         logInfo("Downloading checksums...");
@@ -251,13 +248,12 @@ async function main () {
         }
 
         logInfo("Extracting caddy executable...");
-        extractArchive(archivePath, getRuntimeDir(), assetName);
+        await extractArchive(archivePath, getRuntimeDir(), assetName);
 
-        fs.rmSync(archivePath, { force: true });
-        logInfo(`Caddy is ready: ${getExecutablePath()}`);
+        await Deno.remove(archivePath, { force: true });
     } catch (error) {
         console.error(`[caddy-cli postinstall] failed: ${error instanceof Error ? error.message : String(error)}`);
-        process.exitCode = 1;
+        Deno.exit(1);
     }
 }
 
