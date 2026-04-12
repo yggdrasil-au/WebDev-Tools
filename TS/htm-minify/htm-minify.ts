@@ -1,19 +1,58 @@
-#!/usr/bin/env node
-import fs from 'node:fs'
-import fsPromises from 'node:fs/promises'
-import path from 'node:path'
-import { exec } from 'node:child_process'
-import { promisify } from 'node:util'
-import os from 'node:os'
-import readline from 'node:readline'
-import fg from 'npm:fast-glob@^3.3.3'
-import { minify } from 'npm:html-minifier-terser@^7.2.0'
+import fg from 'fast-glob'
+import { minify } from 'html-minifier-terser'
+import { Engine } from 'php-parser'
 
-const execAsync = promisify(exec)
+// Initialize the PHP Parser Engine
+const phpEngine = new Engine({
+    parser: { extractDoc: false },
+    ast: { withPositions: false }
+});
 
 // --- Helpers ---
 
-function formatTime(ms) {
+/**
+ * Minifies PHP blocks locally without requiring the PHP binary.
+ * Tokenizes the content and filters out comments and excess whitespace.
+ */
+function minifyPhpLocally(content: string): string {
+    try {
+        const tokens = phpEngine.tokenGetAll(content);
+        let output = '';
+
+        for (const token of tokens) {
+            if (Array.isArray(token)) {
+                const [name, value] = token;
+
+                // Skip all types of comments
+                if (name === 'T_COMMENT' || name === 'T_DOC_COMMENT') {
+                    continue;
+                }
+
+                // Collapse whitespace to a single space
+                if (name === 'T_WHITESPACE') {
+                    output += ' ';
+                    continue;
+                }
+
+                output += value;
+            } else {
+                // Literals/characters that aren't wrapped in token arrays (like ';' or '{')
+                output += token;
+            }
+        }
+
+        // Final cleanup: remove double spaces and fix spacing around PHP tags
+        return output
+            .replace(/[ \t]+/g, ' ')
+            .replace(/\s+\?>/g, '?>')
+            .replace(/<\?php\s+/g, '<?php ');
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`PHP Tokenization failed: ${msg}`);
+    }
+}
+
+function formatTime(ms: number): string {
     if (ms < 1000) return `${ms}ms`
     const s = Math.floor(ms / 1000)
     const m = Math.floor(s / 60)
@@ -22,12 +61,11 @@ function formatTime(ms) {
     return `${m}m ${sec}s`
 }
 
-function getConcurrency(val) {
-    const cpuCount = os.cpus().length;
-    let concurrency;
+function getConcurrency(val?: string | boolean): number {
+    const cpuCount = navigator.hardwareConcurrency;
+    let concurrency: number;
 
     if (val === undefined || val === true) {
-        // Default: Half of CPUs, at least 1
         return Math.max(1, Math.round(cpuCount / 2));
     }
 
@@ -35,16 +73,11 @@ function getConcurrency(val) {
         if (val === 'cpu') {
             concurrency = cpuCount;
         } else {
-            // Handle "cpu-1", "cpu+2" etc.
             const diff = parseInt(val.replace('cpu', ''), 10);
-            if (!isNaN(diff)) {
-                concurrency = cpuCount + diff;
-            } else {
-                concurrency = 1;
-            }
+            concurrency = !isNaN(diff) ? cpuCount + diff : 1;
         }
     } else {
-        const parsed = parseInt(val, 10);
+        const parsed = parseInt(String(val), 10);
         concurrency = isNaN(parsed) ? 1 : parsed;
     }
 
@@ -52,16 +85,19 @@ function getConcurrency(val) {
 }
 
 class ProgressBar {
-    constructor(total) {
+    total: number;
+    current: number = 0;
+    success: number = 0;
+    fail: number = 0;
+    startTime: number = Date.now();
+    isTTY: boolean;
+
+    constructor(total: number) {
         this.total = total;
-        this.current = 0;
-        this.success = 0;
-        this.fail = 0;
-        this.startTime = Date.now();
-        this.isTTY = process.stdout.isTTY;
+        this.isTTY = Deno.stdout.isTerminal();
     }
 
-    update(success) {
+    update(success: boolean) {
         this.current++;
         if (success) this.success++;
         else this.fail++;
@@ -69,7 +105,6 @@ class ProgressBar {
         if (this.isTTY) {
             this.render();
         } else if (this.current % 100 === 0 || this.current === this.total) {
-            // Log every 100 items if not TTY (e.g. CI)
             console.log(`Progress: ${this.current}/${this.total} (Success: ${this.success}, Fail: ${this.fail})`);
         }
     }
@@ -77,24 +112,23 @@ class ProgressBar {
     render() {
         const percentage = Math.round((this.current / this.total) * 100);
         const elapsed = Date.now() - this.startTime;
-        const rate = this.current > 0 ? this.current / elapsed : 0; // items per ms
+        const rate = this.current > 0 ? this.current / elapsed : 0;
         const etaMs = rate > 0 ? (this.total - this.current) / rate : 0;
-        
+
         const barLength = 20;
         const filledLength = Math.round((barLength * this.current) / this.total);
         const bar = '█'.repeat(filledLength) + '░'.repeat(barLength - filledLength);
-        
+
         const status = `[${bar}] ${percentage}% | ${this.current}/${this.total} | ✅ ${this.success} ❌ ${this.fail} | Time: ${formatTime(elapsed)} | ETA: ${formatTime(etaMs)}`;
 
-        readline.clearLine(process.stdout, 0);
-        readline.cursorTo(process.stdout, 0);
-        process.stdout.write(status);
+        const encoder = new TextEncoder();
+        Deno.stdout.writeSync(encoder.encode(`\x1b[2K\r${status}`));
     }
 
     finish() {
         if (this.isTTY) {
             this.render();
-            process.stdout.write('\n');
+            Deno.stdout.writeSync(new TextEncoder().encode('\n'));
         }
         const totalTime = Date.now() - this.startTime;
         console.log(`\nDone in ${formatTime(totalTime)}.`);
@@ -102,41 +136,23 @@ class ProgressBar {
     }
 }
 
-async function minifyOne(file, logInfo = true) {
+async function minifyOne(file: string, logInfo = true): Promise<boolean> {
     if (logInfo) console.log(`Processing ${file}...`)
-    let content;
+    let content: string;
     try {
-        content = await fsPromises.readFile(file, 'utf8')
+        content = await Deno.readTextFile(file);
     } catch (e) {
         if (logInfo) console.error(`Error reading ${file}:`, e);
         return false;
     }
 
-    // 1. Minify PHP (if present)
-    // We use php -w to strip comments and whitespace from PHP blocks.
-    // This requires PHP to be installed and in the PATH.
+    // 1. Minify PHP Logic (Now Local/Native)
     if (file.endsWith('.phtml') || file.endsWith('.php') || file.endsWith('.shtml') || content.includes('<?php')) {
-        let tempFile = file + '.temp.php';
         try {
-            await fsPromises.writeFile(tempFile, content);
-
-            // Run php -w using execAsync
-            // We capture stdout.
-            const { stdout } = await execAsync(`php -w "${tempFile}"`, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-
-            if (stdout) {
-                content = stdout;
-            }
+            content = minifyPhpLocally(content);
         } catch (e) {
-            if (logInfo) console.warn(`Warning: Failed to minify PHP in ${file}. Continuing with HTML minification only. Error: ${e.message}`);
-        } finally {
-            try {
-                await fsPromises.unlink(tempFile);
-            } catch (unlinkErr) {
-                if (unlinkErr.code !== 'ENOENT') {
-                    // ignore
-                }
-            }
+            const msg = e instanceof Error ? e.message : String(e);
+            if (logInfo) console.warn(`Warning: PHP minification skipped for ${file}. Error: ${msg}`);
         }
     }
 
@@ -147,13 +163,13 @@ async function minifyOne(file, logInfo = true) {
             removeComments: true,
             minifyCSS: true,
             minifyJS: true,
-            ignoreCustomFragments: [ /<\?php[\s\S]*?\?>/ ], // Ignore PHP blocks so html-minifier doesn't mangle them
+            ignoreCustomFragments: [ /<\?php[\s\S]*?\?>/ ],
             keepClosingSlash: true,
             caseSensitive: true,
-            includeAutoGeneratedTags: false // Prevent inserting tags that might break PHP structure
+            includeAutoGeneratedTags: false
         })
 
-        await fsPromises.writeFile(file, result, 'utf8')
+        await Deno.writeTextFile(file, result);
         if (logInfo) console.log(`Minified: ${file}`)
         return true;
     } catch (e) {
@@ -162,35 +178,35 @@ async function minifyOne(file, logInfo = true) {
     }
 }
 
-async function processBatch(files, concurrency) {
+async function processBatch(files: string[], concurrency: number) {
     const total = files.length;
     console.log(`Processing ${total} files with concurrency: ${concurrency}`);
-    
+
     const progressBar = new ProgressBar(total);
-    const results = [];
-    const executing = [];
-    
+    const results: Promise<void>[] = [];
+    const executing: Promise<void>[] = [];
+
     for (const file of files) {
-        const p = minifyOne(file, false).then(success => {
+        const p = minifyOne(file, false).then((success) => {
             progressBar.update(success);
             executing.splice(executing.indexOf(p), 1);
         });
-        
+
         results.push(p);
         executing.push(p);
-        
+
         if (executing.length >= concurrency) {
             await Promise.race(executing);
         }
     }
-    
+
     await Promise.all(results);
     progressBar.finish();
 }
 
 async function run() {
-    const args = process.argv.slice(2);
-    const inputDirs = [];
+    const args = Deno.args;
+    const inputDirs: string[] = [];
     let concurrency = 1;
     let parallelFlagFound = false;
 
@@ -201,53 +217,48 @@ async function run() {
                 i++;
             }
         } else if (args[i] === '--parallel') {
-             parallelFlagFound = true;
-             // Check if next arg is a value or another flag
-             const nextArg = args[i + 1];
-             if (nextArg && !nextArg.startsWith('--')) {
-                 concurrency = getConcurrency(nextArg);
-                 i++;
-             } else {
-                 concurrency = getConcurrency();
-             }
+            parallelFlagFound = true;
+            const nextArg = args[i + 1];
+            if (nextArg && !nextArg.startsWith('--')) {
+                concurrency = getConcurrency(nextArg);
+                i++;
+            } else {
+                concurrency = getConcurrency();
+            }
         }
     }
 
     if (inputDirs.length === 0) {
-        console.log('No input directories specified. Use --inputDir <path>. Defaulting to www/dist for backward compatibility if needed, or exiting.');
-        // For safety, let's require the argument as requested.
-        console.error('Error: No input directories specified. Usage: htm-minify --inputDir <path> [--parallel [val]]');
-        process.exit(1);
+        console.error('Error: No input directories specified. Usage: deno task start --inputDir <path> [--parallel [val]]');
+        Deno.exit(1);
     }
 
     const patterns = inputDirs.map(dir => {
-        // Normalize path separators to forward slashes for fast-glob
         const cleanDir = dir.replace(/\\/g, '/').replace(/\/$/, '');
         return `${cleanDir}/**/*.{html,phtml,htm,shtml}`;
     });
 
     console.log(`Searching for files in: ${inputDirs.join(', ')}`);
 
-    // Look for html, phtml, htm, shtml in specified directories
     const files = await fg(patterns);
 
     if (files.length === 0) {
-        console.log('No HTML/PHTML files found to minify.')
-        return
+        console.log('No HTML/PHTML files found to minify.');
+        return;
     }
 
     if (parallelFlagFound) {
-         await processBatch(files, concurrency);
+        await processBatch(files, concurrency);
     } else {
-         for (const file of files) {
+        for (const file of files) {
             await minifyOne(file, true);
-         }
+        }
     }
 }
 
 try {
-    await run()
+    await run();
 } catch (error) {
-    console.error(error)
-    process.exitCode = 1
+    console.error(error);
+    Deno.exit(1);
 }

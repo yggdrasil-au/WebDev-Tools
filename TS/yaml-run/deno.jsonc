@@ -1,0 +1,7 @@
+{
+    "name": "@yggdrasil-au/yaml-run",
+    "version": "1.0.0",
+    "exports": {
+        ".": "./main.js"
+    }
+}

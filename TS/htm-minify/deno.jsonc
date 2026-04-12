@@ -1,0 +1,16 @@
+{
+    "name": "@yggdrasil-au/htm-minify",
+    "version": "0.1.0",
+    "tasks": {
+        "start": "deno run --allow-read --allow-write htm-minify.ts",
+        "compile": "deno compile --allow-read --allow-write --output htm-minify htm-minify.ts"
+    },
+    "imports": {
+        "fast-glob": "npm:fast-glob@^3.3.3",
+        "html-minifier-terser": "npm:html-minifier-terser@^7.2.0",
+        "php-parser": "npm:php-parser@^3.1.5"
+    },
+    "exports": {
+        ".": "./htm-minify.ts"
+    }
+}

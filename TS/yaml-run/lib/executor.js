@@ -1,28 +1,52 @@
 import { addStat } from './stats.js';
 import { injectVariables } from './config.js';
+import { classifyCommand } from './resolution.js';
 
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
 const isWin = Deno.build.os === 'windows';
+const denoExecutable = Deno.execPath();
+
+function buildEnvironment(envVars) {
+    const baseEnvironment = Deno.env.toObject();
+    return envVars ? { ...baseEnvironment, ...envVars } : baseEnvironment;
+}
+
+function quoteForDisplay(value) {
+    if (value.length === 0) {
+        return '""';
+    }
+
+    if (/\s|"/.test(value)) {
+        return `"${value.replace(/"/g, '\\"')}"`;
+    }
+
+    return value;
+}
+
+function formatCommandForDisplay(commandParts) {
+    return commandParts.map((part) => quoteForDisplay(part)).join(' ');
+}
 
 /**
- * Executes a single shell command
+ * Executes a single shell command.
+ *
+ * @param {string} command
+ * @param {string} siteRoot
+ * @param {Record<string, string>} [envVars]
  */
-function executeShell(command, envVars) {
+function executeShell(command, siteRoot, envVars) {
     const start = Date.now();
     return new Promise((resolve, reject) => {
-        // Strip newlines for cleaner logging/execution
         const cleanCommand = command.replace(/\n/g, ' ');
         console.log(`\x1b[36m> ${cleanCommand}\x1b[0m`);
 
         try {
             const child = new Deno.Command(isWin ? 'cmd' : 'sh', {
                 args: isWin ? ['/d', '/s', '/c', cleanCommand] : ['-c', cleanCommand],
-                cwd: Deno.cwd(),
-                env: envVars ? { ...Deno.env.toObject(), ...envVars } : Deno.env.toObject(),
+                cwd: siteRoot,
+                env: buildEnvironment(envVars),
                 stdin: 'null',
                 stdout: 'inherit',
-                stderr: 'inherit'
+                stderr: 'inherit',
             }).spawn();
 
             child.status.then((result) => {
@@ -30,8 +54,11 @@ function executeShell(command, envVars) {
                 const status = result.success ? 'PASS' : 'FAIL';
                 addStat({ type: 'CMD', name: cleanCommand, duration, status });
 
-                if (result.success) resolve();
-                else reject(new Error(`Command failed with code ${result.code}`));
+                if (result.success) {
+                    resolve();
+                } else {
+                    reject(new Error(`Command failed with code ${result.code}`));
+                }
             }).catch(reject);
         } catch (error) {
             reject(error);
@@ -39,86 +66,128 @@ function executeShell(command, envVars) {
     });
 }
 
-function looksLikeTaskName(value) {
-    if (typeof value !== 'string') return false;
-    const trimmed = value.trim();
-    if (trimmed.length === 0) return false;
+/**
+ * Executes a managed Deno-backed tool.
+ *
+ * @param {{ label: string, executeSpec: string }} tool
+ * @param {string[]} args
+ * @param {string} siteRoot
+ * @param {Record<string, string>} [envVars]
+ */
+function executeDenoTool(tool, args, siteRoot, envVars) {
+    const start = Date.now();
+    const commandParts = [denoExecutable, 'run', '-A', tool.executeSpec, ...args];
+    console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
-    // If it contains obvious shell operators/whitespace, treat it as a command.
-    return !(/[\s&|;<>]/.test(trimmed));
+    return new Promise((resolve, reject) => {
+        try {
+            const child = new Deno.Command(denoExecutable, {
+                args: ['run', '-A', tool.executeSpec, ...args],
+                cwd: siteRoot,
+                env: buildEnvironment(envVars),
+                stdin: 'null',
+                stdout: 'inherit',
+                stderr: 'inherit',
+            }).spawn();
+
+            child.status.then((result) => {
+                const duration = Date.now() - start;
+                const status = result.success ? 'PASS' : 'FAIL';
+                addStat({ type: 'TOOL', name: `${tool.label} ${args.join(' ')}`.trim(), duration, status });
+
+                if (result.success) {
+                    resolve();
+                } else {
+                    reject(new Error(`Tool failed with code ${result.code}`));
+                }
+            }).catch(reject);
+        } catch (error) {
+            reject(error);
+        }
+    });
 }
 
-async function runCommandOrTask(value, scriptConfig, variables) {
+/**
+ * Runs a raw string as either a managed task, a managed tool, or shell text.
+ *
+ * @param {string} value
+ * @param {{ siteRoot: string, scripts: Record<string, unknown>, variables: Record<string, unknown>, toolCatalog: Map<string, Array<{ label: string, executeSpec: string }>> }} context
+ */
+async function runCommandOrTask(value, context) {
     if (typeof value !== 'string') {
         throw new Error(`Unsupported step type: ${typeof value}`);
     }
 
-    const trimmed = value.trim();
+    const injectedCommand = injectVariables(value, context.variables);
+    const classification = classifyCommand(injectedCommand, context.scripts, context.toolCatalog);
 
-    // Prefer task execution if it exists; otherwise treat as a shell command.
-    if (Object.prototype.hasOwnProperty.call(scriptConfig, trimmed) && looksLikeTaskName(trimmed)) {
-        await runTask(trimmed, scriptConfig, variables);
+    if (classification.kind === 'script' && classification.scriptName) {
+        await runTask(classification.scriptName, context);
         return;
     }
 
-    const finalCmd = injectVariables(value, variables);
-    await executeShell(finalCmd);
+    if (classification.kind === 'tool' && classification.tool) {
+        await executeDenoTool(
+            classification.tool,
+            classification.args ?? [],
+            context.siteRoot
+        );
+        return;
+    }
+
+    await executeShell(classification.rawCommand, context.siteRoot);
 }
 
 /**
- * Main Task Runner Logic (Recursive for parallel/series)
+ * Main Task Runner Logic (Recursive for parallel/series).
+ *
+ * @param {string} taskName
+ * @param {{ siteRoot: string, scripts: Record<string, unknown>, variables: Record<string, unknown>, toolCatalog: Map<string, Array<{ label: string, executeSpec: string }>> }} context
  */
-export async function runTask(taskName, scriptConfig, variables) {
+export async function runTask(taskName, context) {
     const start = Date.now();
     let status = 'FAIL';
 
     try {
-        const task = scriptConfig[taskName];
+        const task = context.scripts[taskName];
 
         if (!task) {
             throw new Error(`Task "${taskName}" not found in scripts.yaml`);
         }
 
-        // CASE 1: Task is a simple string command
         if (typeof task === 'string') {
-            await runCommandOrTask(task, scriptConfig, variables);
+            await runCommandOrTask(task, context);
             status = 'PASS';
             return;
         }
 
-        // CASE 1b: Task is a list of steps (shorthand series)
         if (Array.isArray(task)) {
             for (const step of task) {
-                await runCommandOrTask(step, scriptConfig, variables);
+                await runCommandOrTask(step, context);
             }
             status = 'PASS';
             return;
         }
 
-        // CASE 2: Task is an object (Complex Logic)
         if (typeof task === 'object') {
-
-            // Handle Parallel Execution
             if (task.parallel && Array.isArray(task.parallel)) {
                 console.log(`\x1b[33m[Parallel] Starting: ${task.parallel.join(', ')}\x1b[0m`);
-                const promises = task.parallel.map((t) => runCommandOrTask(t, scriptConfig, variables));
+                const promises = task.parallel.map((t) => runCommandOrTask(t, context));
                 await Promise.all(promises);
                 status = 'PASS';
                 return;
             }
 
-            // Handle Series Execution
             if (task.series && Array.isArray(task.series)) {
                 for (const subTask of task.series) {
-                    await runCommandOrTask(subTask, scriptConfig, variables);
+                    await runCommandOrTask(subTask, context);
                 }
                 status = 'PASS';
                 return;
             }
 
-            // Handle direct "cmd" or "script" key inside object
             if (task.cmd || task.script) {
-                await runCommandOrTask(task.cmd || task.script, scriptConfig, variables);
+                await runCommandOrTask(task.cmd || task.script, context);
                 status = 'PASS';
                 return;
             }

@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import yaml from 'npm:js-yaml@^4.1.1';
-import { CWD, CONFIG_FILES } from './constants.js';
+import { createConfigFiles } from './constants.js';
 import { flattenVariables, isPlainObject, getValueByPath } from './utils.js';
 
 async function pathExists(filePath) {
@@ -12,6 +12,7 @@ async function pathExists(filePath) {
         if (error instanceof Deno.errors.NotFound) {
             return false;
         }
+
         throw error;
     }
 }
@@ -220,18 +221,20 @@ function resolveVarsPlaceholders(rootData) {
 /**
  * Loads and resolves variables from vars.yaml and its referenced sources
  */
-export async function loadVariables() {
-    if (!(await pathExists(CONFIG_FILES.vars))) {
+export async function loadVariables(siteRoot = Deno.cwd()) {
+    const configFiles = createConfigFiles(siteRoot);
+
+    if (!(await pathExists(configFiles.vars))) {
         return {};
     }
 
-    const rawConfig = yaml.load(await Deno.readTextFile(CONFIG_FILES.vars)) || {};
+    const rawConfig = yaml.load(await Deno.readTextFile(configFiles.vars)) || {};
     const mergedData = {};
 
     // 1. Process "sources" (external files)
     if (rawConfig.sources) {
         for (const [scope, filePath] of Object.entries(rawConfig.sources)) {
-            const absolutePath = path.resolve(CWD, filePath);
+            const absolutePath = path.resolve(siteRoot, filePath);
 
             if (!(await pathExists(absolutePath))) {
                 console.warn(`[yaml-run] Warning: Source file not found: ${filePath}`);
