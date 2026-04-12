@@ -48,6 +48,9 @@ function formatType(type) {
         case 'TOOL': {
             return colorize(type.padEnd(5), 'magenta', true);
         }
+        case 'FS': {
+            return colorize(type.padEnd(5), 'blue', true);
+        }
         default: {
             return colorize(type.padEnd(5), 'gray', true);
         }
@@ -125,10 +128,10 @@ function getChildrenByParentId() {
 }
 
 /**
- * Records a task, tool, PATH command, or shell command execution node.
+ * Records a task, tool, filesystem, PATH command, or shell command execution node.
  *
- * @param {{ type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId?: number | null, depth?: number, status?: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration?: number }} stat
- * @returns {{ id: number, sequence: number, type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId: number | null, depth: number, status: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration: number }}
+ * @param {{ type: 'TASK' | 'CMD' | 'PATH' | 'TOOL' | 'FS', name: string, parentId?: number | null, depth?: number, status?: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration?: number }} stat
+ * @returns {{ id: number, sequence: number, type: 'TASK' | 'CMD' | 'PATH' | 'TOOL' | 'FS', name: string, parentId: number | null, depth: number, status: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration: number }}
  */
 export function addStat(stat) {
     const record = {

@@ -13,7 +13,7 @@ scripts:
   # =================================================================
   # Any simple string is treated as a command.
   # Variable placeholders {{...}} are replaced before execution.
-  clean: "npm:rimraf {{paths.dist}}"
+  clean: "fs: rm {{paths.dist}}"
 
   # =================================================================
   # 2. Sequential Execution (Series)
@@ -41,7 +41,18 @@ scripts:
       - "path: stylelint {{paths.src}}/**/*.css"
 
   # =================================================================
-  # 4. Combinations
+  # 4. Native Filesystem Helpers
+  # =================================================================
+  # yaml-run includes a built-in `fs:` prefix for portable file operations.
+  # Use `rm`, `mkdir`, and `copy` instead of shelling out to shx/rimraf.
+  prepare-assets:
+    series:
+      - "fs: mkdir {{paths.dist}}"
+      - "fs: copy {{paths.src}}/* {{paths.dist}}"
+      - "fs: rm {{paths.dist}}/**/*.tmp"
+
+  # =================================================================
+  # 5. Combinations
   # =================================================================
   # You can mix series and parallel execution.
   deploy:
@@ -51,7 +62,7 @@ scripts:
       - "cross-shell: echo Deploying {{project.name}}..."
 
   # =================================================================
-  # 5. IMPORTANT: Explicit Command Tags
+  # 6. IMPORTANT: Explicit Command Tags
   # =================================================================
   # The runner now uses explicit prefixes instead of an ambiguous shell fallback.
   #

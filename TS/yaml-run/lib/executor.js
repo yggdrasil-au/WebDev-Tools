@@ -1,3 +1,7 @@
+import path from 'node:path';
+
+import { expandGlob } from 'jsr:@std/fs';
+
 import { addStat } from './stats.js';
 import { injectVariables } from './config.js';
 import { classifyCommand } from './resolution.js';
@@ -7,6 +11,7 @@ const denoExecutable = Deno.execPath();
 const activeProcesses = new Map();
 let shutdownRequested = false;
 let shutdownWaiters = [];
+const SUPPORTED_FS_ACTIONS = new Set(['rm', 'mkdir', 'copy']);
 
 /**
  * @typedef {{
@@ -42,6 +47,84 @@ function quoteForDisplay(value) {
 
 function formatCommandForDisplay(commandParts) {
     return commandParts.map((part) => quoteForDisplay(part)).join(' ');
+}
+
+function isGlobPattern(targetPath) {
+    return /[*?[\]{}]/.test(targetPath);
+}
+
+async function pathExists(targetPath) {
+    try {
+        return await Deno.stat(targetPath);
+    } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+            return null;
+        }
+
+        throw error;
+    }
+}
+
+async function removePath(targetPath) {
+    try {
+        await Deno.remove(targetPath, { recursive: true });
+    } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) {
+            throw error;
+        }
+    }
+}
+
+async function removeGlobPattern(siteRoot, targetPattern) {
+    const globOptions = path.isAbsolute(targetPattern) ? undefined : { root: siteRoot };
+    let matched = false;
+
+    for await (const entry of expandGlob(targetPattern, globOptions)) {
+        matched = true;
+        await removePath(path.resolve(siteRoot, entry.path));
+    }
+
+    return matched;
+}
+
+async function copyPathRecursive(sourcePath, destinationPath) {
+    const sourceInfo = await Deno.stat(sourcePath);
+    const destinationInfo = await pathExists(destinationPath);
+    const finalDestination = destinationInfo && destinationInfo.isDirectory
+        ? path.join(destinationPath, path.basename(sourcePath))
+        : destinationPath;
+
+    if (sourceInfo.isDirectory) {
+        await Deno.mkdir(finalDestination, { recursive: true });
+
+        for await (const entry of Deno.readDir(sourcePath)) {
+            await copyPathRecursive(
+                path.join(sourcePath, entry.name),
+                path.join(finalDestination, entry.name)
+            );
+        }
+
+        return;
+    }
+
+    await Deno.mkdir(path.dirname(finalDestination), { recursive: true });
+    await Deno.copyFile(sourcePath, finalDestination);
+}
+
+async function copyGlobMatches(siteRoot, sourcePattern, destinationPath) {
+    const globOptions = path.isAbsolute(sourcePattern) ? undefined : { root: siteRoot };
+    let matched = false;
+
+    for await (const entry of expandGlob(sourcePattern, globOptions)) {
+        if (!matched) {
+            await Deno.mkdir(destinationPath, { recursive: true });
+            matched = true;
+        }
+
+        await copyPathRecursive(path.resolve(siteRoot, entry.path), destinationPath);
+    }
+
+    return matched;
 }
 
 function resolveShutdownWaiters() {
@@ -155,6 +238,90 @@ function resolveShellCommand(shellKind) {
                     args: ['-lc'],
                 };
         }
+    }
+}
+
+/**
+ * Executes native filesystem operations.
+ *
+ * @param {'rm' | 'mkdir' | 'copy'} action
+ * @param {string[]} args
+ * @param {string} siteRoot
+ * @param {{ id: number, depth: number } | null} parentStat
+ */
+async function executeFs(action, args, siteRoot, parentStat) {
+    const start = Date.now();
+    const stat = addStat({
+        type: 'FS',
+        name: `fs: ${action} ${args.join(' ')}`.trim(),
+        parentId: parentStat ? parentStat.id : null,
+        depth: parentStat ? parentStat.depth + 1 : 0,
+        status: 'RUNNING',
+        duration: 0,
+    });
+
+    try {
+        console.log(`[36m> ${formatCommandForDisplay(['fs', action, ...args])}[0m`);
+
+        if (!SUPPORTED_FS_ACTIONS.has(action)) {
+            throw new Error(`Unknown fs action: ${action}`);
+        }
+
+        switch (action) {
+            case 'rm': {
+                if (args.length === 0) {
+                    throw new Error('fs: rm requires at least one target.');
+                }
+
+                for (const targetSpec of args) {
+                    if (isGlobPattern(targetSpec)) {
+                        await removeGlobPattern(siteRoot, targetSpec);
+                        continue;
+                    }
+
+                    await removePath(path.resolve(siteRoot, targetSpec));
+                }
+
+                break;
+            }
+            case 'mkdir': {
+                if (args.length === 0) {
+                    throw new Error('fs: mkdir requires at least one target.');
+                }
+
+                for (const directorySpec of args) {
+                    await Deno.mkdir(path.resolve(siteRoot, directorySpec), { recursive: true });
+                }
+
+                break;
+            }
+            case 'copy': {
+                if (args.length !== 2) {
+                    throw new Error('fs: copy requires a source and destination.');
+                }
+
+                const [sourceSpec, destinationSpec] = args;
+                const destinationPath = path.resolve(siteRoot, destinationSpec);
+
+                if (isGlobPattern(sourceSpec)) {
+                    await copyGlobMatches(siteRoot, sourceSpec, destinationPath);
+                } else {
+                    await copyPathRecursive(path.resolve(siteRoot, sourceSpec), destinationPath);
+                }
+
+                break;
+            }
+            default: {
+                throw new Error(`Unknown fs action: ${action}`);
+            }
+        }
+
+        stat.status = 'PASS';
+    } catch (error) {
+        stat.status = 'FAIL';
+        throw error;
+    } finally {
+        stat.duration = Date.now() - start;
     }
 }
 
@@ -401,6 +568,16 @@ async function runCommandOrTask(value, context, parentStat, interactive = false)
             undefined,
             parentStat,
             interactive ? 'inherit' : 'null'
+        );
+        return;
+    }
+
+    if (classification.kind === 'fs' && classification.fsAction) {
+        await executeFs(
+            classification.fsAction,
+            classification.fsArgs ?? [],
+            context.siteRoot,
+            parentStat
         );
         return;
     }

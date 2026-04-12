@@ -41,13 +41,15 @@ const IGNORED_DIRECTORIES = new Set([
 
 /**
  * @typedef {{
- *     kind: 'script' | 'tool' | 'shell' | 'path',
+ *     kind: 'script' | 'tool' | 'shell' | 'path' | 'fs',
  *     rawCommand: string,
  *     firstToken?: string,
  *     args?: string[],
  *     scriptName?: string,
  *     tool?: ToolCandidate,
  *     executable?: string,
+ *     fsAction?: string,
+ *     fsArgs?: string[],
  *     shellKind?: 'cross-shell' | 'cmd' | 'powershell' | 'pwsh' | 'bash',
  *     compatibilityAlias?: 'shell',
  * }} CommandClassification
@@ -63,6 +65,7 @@ const EXPLICIT_COMMAND_PREFIXES = new Set([
     'path',
     'npm',
     'workspace',
+    'fs',
 ]);
 
 async function pathExists(filePath) {
@@ -864,6 +867,21 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
                 executable: explicitTokens[0],
                 firstToken: explicitTokens[0],
                 args: explicitTokens.slice(1),
+            };
+        }
+
+        if (explicitCommand.prefix === 'fs') {
+            if (!explicitTokens || explicitTokens.length === 0) {
+                throw new Error(`Command "${trimmedCommand}" is missing a filesystem action.`);
+            }
+
+            const [fsAction, ...fsArgs] = explicitTokens;
+            return {
+                kind: 'fs',
+                rawCommand: trimmedCommand,
+                firstToken: fsAction,
+                fsAction,
+                fsArgs,
             };
         }
 

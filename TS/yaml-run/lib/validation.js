@@ -27,15 +27,15 @@ function hasPortableAlternative(commandText) {
     const normalizedCommand = commandText.toLowerCase();
 
     if (/\brm\s+-rf\b/.test(normalizedCommand) || /\bshx\s+rm\b/.test(normalizedCommand)) {
-        return 'Use `npm:rimraf` or a Deno filesystem delete helper instead of `rm -rf`.';
+        return 'Use the `fs:` prefix with `rm` instead of `rm -rf` or `shx rm`.';
     }
 
     if (/\bmkdir\s+-p\b/.test(normalizedCommand)) {
-        return 'Use `Deno.mkdir(..., { recursive: true })` or a direct filesystem helper instead of `mkdir -p`.';
+        return 'Use the `fs:` prefix with `mkdir` instead of `mkdir -p`.';
     }
 
     if (/\bcp\s+-r\b/.test(normalizedCommand) || /\bshx\s+cp\b/.test(normalizedCommand)) {
-        return 'Use a Deno filesystem copy helper or split the work into explicit file operations instead of `cp -r`.';
+        return 'Use the `fs:` prefix with `copy` instead of `cp -r` or `shx cp`.';
     }
 
     if (/\bdeno\s+run\b/.test(normalizedCommand)) {
@@ -117,6 +117,40 @@ function validateTask(task, context, scriptName, stepPath, warnings) {
 }
 
 /**
+ * @param {import('./resolution.js').CommandClassification} classification
+ * @param {string} scriptName
+ * @param {string} stepPath
+ * @param {ValidationWarning[]} warnings
+ */
+function validateFsCommand(classification, scriptName, stepPath, warnings) {
+    const action = classification.fsAction ?? '';
+    const args = classification.fsArgs ?? [];
+
+    if (action.length === 0) {
+        addWarning(warnings, scriptName, stepPath, 'The `fs:` prefix requires an action such as `rm`, `mkdir`, or `copy`.');
+        return;
+    }
+
+    if (action === 'rm' || action === 'mkdir') {
+        if (args.length === 0) {
+            addWarning(warnings, scriptName, stepPath, `The \`fs: ${action}\` action requires at least one path.`);
+        }
+
+        return;
+    }
+
+    if (action === 'copy') {
+        if (args.length !== 2) {
+            addWarning(warnings, scriptName, stepPath, 'The `fs: copy` action requires exactly one source path and one destination path.');
+        }
+
+        return;
+    }
+
+    addWarning(warnings, scriptName, stepPath, `Unknown fs action: ${action}. Supported actions are rm, mkdir, and copy.`);
+}
+
+/**
  * @param {string} command
  * @param {ValidationContext} context
  * @param {string} scriptName
@@ -185,6 +219,11 @@ function validateCommand(command, context, scriptName, stepPath, warnings) {
             );
         }
 
+        return;
+    }
+
+    if (classification.kind === 'fs') {
+        validateFsCommand(classification, scriptName, stepPath, warnings);
         return;
     }
 }
