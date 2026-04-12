@@ -5,6 +5,21 @@ import { classifyCommand } from './resolution.js';
 const isWin = Deno.build.os === 'windows';
 const denoExecutable = Deno.execPath();
 
+/**
+ * @typedef {{
+ *     parentId: number | null,
+ *     depth: number,
+ * }} ExecutionScope
+ *
+ * @typedef {{
+ *     siteRoot: string,
+ *     scripts: Record<string, unknown>,
+ *     variables: Record<string, unknown>,
+ *     toolCatalog: Map<string, Array<{ label: string, executeSpec: string }>>,
+ *     execution?: ExecutionScope,
+ * }} ExecutionContext
+ */
+
 function buildEnvironment(envVars) {
     const baseEnvironment = Deno.env.toObject();
     return envVars ? { ...baseEnvironment, ...envVars } : baseEnvironment;
@@ -78,9 +93,18 @@ function resolveShellCommand(shellKind) {
  * @param {'CMD' | 'PATH' | 'TOOL'} statType
  * @param {string} statName
  * @param {string} failureLabel
+ * @param {{ id: number, depth: number } | null} parentStat
  */
-function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statName, failureLabel) {
+function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statName, failureLabel, parentStat) {
     const start = Date.now();
+    const stat = addStat({
+        type: statType,
+        name: statName,
+        parentId: parentStat ? parentStat.id : null,
+        depth: parentStat ? parentStat.depth + 1 : 0,
+        status: 'RUNNING',
+        duration: 0,
+    });
 
     return new Promise((resolve, reject) => {
         try {
@@ -96,7 +120,8 @@ function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statNam
             child.status.then((result) => {
                 const duration = Date.now() - start;
                 const status = result.success ? 'PASS' : 'FAIL';
-                addStat({ type: statType, name: statName, duration, status });
+                stat.duration = duration;
+                stat.status = status;
 
                 if (result.success) {
                     resolve();
@@ -117,8 +142,9 @@ function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statNam
  * @param {string} command
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
+ * @param {{ id: number, depth: number } | null} parentStat
  */
-function executeShell(shellKind, command, siteRoot, envVars) {
+function executeShell(shellKind, command, siteRoot, envVars, parentStat) {
     const cleanCommand = command.replace(/\n/g, ' ');
     const shell = resolveShellCommand(shellKind);
     console.log(`\x1b[36m> ${formatCommandForDisplay([shell.command, ...shell.args, cleanCommand])}\x1b[0m`);
@@ -130,7 +156,8 @@ function executeShell(shellKind, command, siteRoot, envVars) {
         envVars,
         'CMD',
         `${shellKind}: ${cleanCommand}`,
-        'Command'
+        'Command',
+        parentStat
     );
 }
 
@@ -141,8 +168,9 @@ function executeShell(shellKind, command, siteRoot, envVars) {
  * @param {string[]} args
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
+ * @param {{ id: number, depth: number } | null} parentStat
  */
-function executePath(executable, args, siteRoot, envVars) {
+function executePath(executable, args, siteRoot, envVars, parentStat) {
     const commandParts = [executable, ...args];
     console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
@@ -153,7 +181,8 @@ function executePath(executable, args, siteRoot, envVars) {
         envVars,
         'PATH',
         formatCommandForDisplay(commandParts),
-        'PATH command'
+        'PATH command',
+        parentStat
     );
 }
 
@@ -164,8 +193,9 @@ function executePath(executable, args, siteRoot, envVars) {
  * @param {string[]} args
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
+ * @param {{ id: number, depth: number } | null} parentStat
  */
-function executeDenoTool(tool, args, siteRoot, envVars) {
+function executeDenoTool(tool, args, siteRoot, envVars, parentStat) {
     const commandParts = [denoExecutable, 'run', '-A', tool.executeSpec, ...args];
     console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
@@ -176,17 +206,34 @@ function executeDenoTool(tool, args, siteRoot, envVars) {
         envVars,
         'TOOL',
         `${tool.label} ${args.join(' ')}`.trim(),
-        'Tool'
+        'Tool',
+        parentStat
     );
+}
+
+/**
+ * @param {ExecutionContext} context
+ * @param {{ id: number, depth: number }} parentStat
+ * @returns {ExecutionContext}
+ */
+function createChildExecutionContext(context, parentStat) {
+    return {
+        ...context,
+        execution: {
+            parentId: parentStat.id,
+            depth: parentStat.depth + 1,
+        },
+    };
 }
 
 /**
  * Runs a raw string as either a managed task, a managed tool, or shell text.
  *
  * @param {string} value
- * @param {{ siteRoot: string, scripts: Record<string, unknown>, variables: Record<string, unknown>, toolCatalog: Map<string, Array<{ label: string, executeSpec: string }>> }} context
+ * @param {ExecutionContext} context
+ * @param {{ id: number, depth: number } | null} parentStat
  */
-async function runCommandOrTask(value, context) {
+async function runCommandOrTask(value, context, parentStat) {
     if (typeof value !== 'string') {
         throw new Error(`Unsupported step type: ${typeof value}`);
     }
@@ -195,7 +242,11 @@ async function runCommandOrTask(value, context) {
     const classification = classifyCommand(injectedCommand, context.scripts, context.toolCatalog);
 
     if (classification.kind === 'script' && classification.scriptName) {
-        await runTask(classification.scriptName, context);
+        if (!parentStat) {
+            throw new Error('Missing execution parent for nested task dispatch.');
+        }
+
+        await runTask(classification.scriptName, createChildExecutionContext(context, parentStat));
         return;
     }
 
@@ -203,7 +254,9 @@ async function runCommandOrTask(value, context) {
         await executeDenoTool(
             classification.tool,
             classification.args ?? [],
-            context.siteRoot
+            context.siteRoot,
+            undefined,
+            parentStat
         );
         return;
     }
@@ -212,23 +265,37 @@ async function runCommandOrTask(value, context) {
         await executePath(
             classification.executable,
             classification.args ?? [],
-            context.siteRoot
+            context.siteRoot,
+            undefined,
+            parentStat
         );
         return;
     }
 
-    await executeShell(classification.shellKind ?? 'cross-shell', classification.rawCommand, context.siteRoot);
+    await executeShell(classification.shellKind ?? 'cross-shell', classification.rawCommand, context.siteRoot, undefined, parentStat);
 }
 
 /**
  * Main Task Runner Logic (Recursive for parallel/series).
  *
  * @param {string} taskName
- * @param {{ siteRoot: string, scripts: Record<string, unknown>, variables: Record<string, unknown>, toolCatalog: Map<string, Array<{ label: string, executeSpec: string }>> }} context
+ * @param {ExecutionContext} context
  */
 export async function runTask(taskName, context) {
     const start = Date.now();
     let status = 'FAIL';
+    const executionScope = context.execution ?? {
+        parentId: null,
+        depth: 0,
+    };
+    const taskStat = addStat({
+        type: 'TASK',
+        name: taskName,
+        parentId: executionScope.parentId,
+        depth: executionScope.depth,
+        status: 'RUNNING',
+        duration: 0,
+    });
 
     try {
         const task = context.scripts[taskName];
@@ -238,14 +305,14 @@ export async function runTask(taskName, context) {
         }
 
         if (typeof task === 'string') {
-            await runCommandOrTask(task, context);
+            await runCommandOrTask(task, context, taskStat);
             status = 'PASS';
             return;
         }
 
         if (Array.isArray(task)) {
             for (const step of task) {
-                await runCommandOrTask(step, context);
+                await runCommandOrTask(step, context, taskStat);
             }
             status = 'PASS';
             return;
@@ -254,22 +321,28 @@ export async function runTask(taskName, context) {
         if (typeof task === 'object') {
             if (task.parallel && Array.isArray(task.parallel)) {
                 console.log(`\x1b[33m[Parallel] Starting: ${task.parallel.join(', ')}\x1b[0m`);
-                const promises = task.parallel.map((t) => runCommandOrTask(t, context));
-                await Promise.all(promises);
+                const promises = task.parallel.map((t) => runCommandOrTask(t, context, taskStat));
+                const results = await Promise.allSettled(promises);
+                const rejectedResult = results.find((result) => result.status === 'rejected');
+
+                if (rejectedResult && rejectedResult.status === 'rejected') {
+                    throw rejectedResult.reason;
+                }
+
                 status = 'PASS';
                 return;
             }
 
             if (task.series && Array.isArray(task.series)) {
                 for (const subTask of task.series) {
-                    await runCommandOrTask(subTask, context);
+                    await runCommandOrTask(subTask, context, taskStat);
                 }
                 status = 'PASS';
                 return;
             }
 
             if (task.cmd || task.script) {
-                await runCommandOrTask(task.cmd || task.script, context);
+                await runCommandOrTask(task.cmd || task.script, context, taskStat);
                 status = 'PASS';
                 return;
             }
@@ -278,6 +351,7 @@ export async function runTask(taskName, context) {
         throw new Error(`Task "${taskName}" has an unsupported shape.`);
     } finally {
         const duration = Date.now() - start;
-        addStat({ type: 'TASK', name: taskName, duration, status });
+        taskStat.duration = duration;
+        taskStat.status = status;
     }
 }

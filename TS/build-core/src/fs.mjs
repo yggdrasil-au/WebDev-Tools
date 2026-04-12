@@ -1,5 +1,33 @@
 import path from 'node:path'
 
+function readEntryFlag(entry, flagNames) {
+    for (const flagName of flagNames) {
+        const value = entry?.[flagName]
+
+        if (typeof value === 'function') {
+            return value.call(entry)
+        }
+
+        if (typeof value !== 'undefined') {
+            return Boolean(value)
+        }
+    }
+
+    return false
+}
+
+function entryIsDirectory(entry) {
+    return readEntryFlag(entry, ['isDirectory'])
+}
+
+function entryIsFile(entry) {
+    return readEntryFlag(entry, ['isFile'])
+}
+
+function entryIsSymbolicLink(entry) {
+    return readEntryFlag(entry, ['isSymbolicLink', 'isSymlink'])
+}
+
 export async function pathExists(p) {
     try {
         await Deno.stat(p)
@@ -35,7 +63,7 @@ export async function copyPath(from, to, {
     await ensureDir(path.dirname(to))
 
     const st = await Deno.lstat(from)
-    if (st.isDirectory()) {
+    if (entryIsDirectory(st)) {
         await ensureDir(to)
         for await (const entry of Deno.readDir(from)) {
             const src = path.join(from, entry.name)
@@ -45,7 +73,7 @@ export async function copyPath(from, to, {
         return
     }
 
-    if (st.isSymbolicLink()) {
+    if (entryIsSymbolicLink(st)) {
         if (!dereference) {
             const link = await Deno.readLink(from)
             if (overwrite) {
@@ -88,7 +116,7 @@ export async function listTreeRelative(rootDir, {
             if (!shouldIncludeName(entry.name, { includeDot })) continue
             const childAbs = path.join(abs, entry.name)
             const childRel = rel ? path.join(rel, entry.name) : entry.name
-            if (entry.isDirectory()) {
+            if (entryIsDirectory(entry)) {
                 if (includeDirs) out.push(childRel)
                 stack.push({ abs: childAbs, rel: childRel })
             } else if (includeFiles) {
@@ -105,5 +133,11 @@ export async function listFilesRelative(rootDir, { includeDot = true } = {}) {
 
 export function toPosixPath(p) {
     return p.split(path.sep).join('/')
+}
+
+export {
+    entryIsDirectory,
+    entryIsFile,
+    entryIsSymbolicLink,
 }
 

@@ -3,6 +3,9 @@ import {
     copyPath,
     emptyDir,
     ensureDir,
+    entryIsDirectory,
+    entryIsFile,
+    entryIsSymbolicLink,
     listFilesRelative,
     listTreeRelative,
     pathExists,
@@ -95,7 +98,7 @@ export function createAssetManager({
         const copied = []
         for (const entry of topLevel) {
             if (entry.name === '.gitkeep') continue
-            if (!entry.isDirectory() && !entry.isFile() && !entry.isSymbolicLink()) continue
+            if (!entryIsDirectory(entry) && !entryIsFile(entry) && !entryIsSymbolicLink(entry)) continue
             const from = path.join(abs.srcWeb, entry.name)
             const to = path.join(abs.distRoot, entry.name)
             copied.push(entry.name)
@@ -114,7 +117,7 @@ export function createAssetManager({
         }
         let removed = 0
         for (const entry of entries) {
-            if (!entry.isFile()) continue
+            if (!entryIsFile(entry)) continue
             if (!entry.name.startsWith('sitemap') || !entry.name.endsWith('.xml')) continue
             const target = path.join(abs.capSync, entry.name)
             if (dryRun) log('[dry-run] remove', target)

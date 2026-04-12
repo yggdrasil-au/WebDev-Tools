@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { entryIsDirectory } from './fs.mjs'
 import { runPackageScript } from './exec.mjs'
 
 export function defaultClassifyChange(filePath) {
@@ -16,7 +17,7 @@ async function listDirsRecursive(baseDir) {
         const dir = stack.pop()
         try {
             for await (const entry of Deno.readDir(dir)) {
-                if (!entry.isDirectory()) continue
+                if (!entryIsDirectory(entry)) continue
                 if (entry.name.startsWith('.')) continue
                 const child = path.join(dir, entry.name)
                 dirs.push(child)
