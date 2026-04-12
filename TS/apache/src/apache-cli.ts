@@ -6,8 +6,10 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import process from 'node:process';
 import * as readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import type { EventEmitter } from 'node:events';
 
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -43,7 +45,7 @@ import {
     writeProcessRegistry,
     writeVHostRegistry,
 } from './registry.js';
-import {
+import type {
     KillOptions,
     StartOptions,
     TrackedApacheProcess,
@@ -56,6 +58,16 @@ import {
     normalizePathForApache,
     safeUnlink,
 } from './utils.js';
+
+type ManagedChildProcess = EventEmitter & {
+    pid: number;
+    kill (signal?: string): boolean;
+    unref (): void;
+};
+
+type ManagedLineInterface = EventEmitter & {
+    close (): void;
+};
 
 // //
 
@@ -210,7 +222,7 @@ async function mapUserConfigIncludes (
     return nextContent;
 }
 
-async function assertRuntimeExists (): Promise<void> {
+function assertRuntimeExists (): void {
     if (!fs.existsSync(APACHE_DIR)) {
         throw new Error('Runtime not found. Run "apache-cli build" first.');
     }
@@ -386,7 +398,7 @@ async function isLocalhostPortReachable (
     return tryConnect('::1', port);
 }
 
-async function tryConnect (
+function tryConnect (
     host: string,
     port: number,
     timeoutMs: number = 300
@@ -561,7 +573,7 @@ program
                 stdio: outputEnabled ? 'inherit' : 'ignore',
                 detached: !outputEnabled,
                 windowsHide: false,
-            });
+            }) as unknown as ManagedChildProcess;
 
             const childPid: number | undefined = child.pid;
             if (!childPid || childPid <= 0) {
@@ -619,7 +631,7 @@ program
 
             let stopRequestedByUser: boolean = false;
             let stopInProgress: boolean = false;
-            let lineInterface: readline.Interface | null = null;
+            let lineInterface: ManagedLineInterface | null = null;
 
             const stopApache = async (): Promise<void> => {
                 if (stopInProgress) {
@@ -641,11 +653,18 @@ program
                 }
             };
 
+            const stopOnSignal = (): void => {
+                void stopApache();
+            };
+
+            process.once('SIGINT', stopOnSignal);
+            process.once('SIGTERM', stopOnSignal);
+
             if (process.stdin.isTTY) {
                 lineInterface = readline.createInterface({
                     input: process.stdin,
                     output: process.stdout,
-                });
+                }) as unknown as ManagedLineInterface;
 
                 lineInterface.on('line', () => {
                     void stopApache();
@@ -660,6 +679,9 @@ program
                         lineInterface.close();
                         lineInterface = null;
                     }
+
+                    process.removeListener('SIGINT', stopOnSignal);
+                    process.removeListener('SIGTERM', stopOnSignal);
 
                     void removeRuntimeStateForPid(childPid).finally(() => {
                         if (!stopRequestedByUser) {

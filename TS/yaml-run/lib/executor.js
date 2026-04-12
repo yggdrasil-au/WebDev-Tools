@@ -4,6 +4,9 @@ import { classifyCommand } from './resolution.js';
 
 const isWin = Deno.build.os === 'windows';
 const denoExecutable = Deno.execPath();
+const activeProcesses = new Map();
+let shutdownRequested = false;
+let shutdownWaiters = [];
 
 /**
  * @typedef {{
@@ -41,6 +44,76 @@ function formatCommandForDisplay(commandParts) {
     return commandParts.map((part) => quoteForDisplay(part)).join(' ');
 }
 
+function resolveShutdownWaiters() {
+    if (!shutdownRequested || activeProcesses.size > 0) {
+        return;
+    }
+
+    const waiters = shutdownWaiters;
+    shutdownWaiters = [];
+
+    for (const resolve of waiters) {
+        resolve();
+    }
+}
+
+function registerActiveProcess(child, stat) {
+    activeProcesses.set(child, { stat });
+}
+
+function unregisterActiveProcess(child) {
+    activeProcesses.delete(child);
+    resolveShutdownWaiters();
+}
+
+function terminateChildProcess(child) {
+    try {
+        child.kill('SIGTERM');
+        return;
+    } catch {
+        try {
+            child.kill();
+        } catch {
+            // Ignore shutdown errors; the child may already be exiting.
+        }
+    }
+}
+
+function markActiveProcessesInterrupted() {
+    for (const { stat } of activeProcesses.values()) {
+        if (stat.status === 'RUNNING') {
+            stat.status = 'INTERRUPTED';
+        }
+    }
+}
+
+export function isShutdownRequested() {
+    return shutdownRequested;
+}
+
+export function requestShutdown() {
+    if (!shutdownRequested) {
+        shutdownRequested = true;
+        markActiveProcessesInterrupted();
+
+        for (const child of activeProcesses.keys()) {
+            terminateChildProcess(child);
+        }
+    }
+
+    resolveShutdownWaiters();
+}
+
+export function waitForShutdown() {
+    if (!shutdownRequested || activeProcesses.size === 0) {
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+        shutdownWaiters.push(resolve);
+    });
+}
+
 /**
  * @param {'cross-shell' | 'cmd' | 'powershell' | 'pwsh' | 'bash'} shellKind
  */
@@ -48,8 +121,8 @@ function resolveShellCommand(shellKind) {
     switch (shellKind) {
         case 'cmd': {
             return {
-                command: 'cmd',
                 args: ['/d', '/s', '/c'],
+                command: 'cmd',
             };
         }
         case 'powershell': {
@@ -94,8 +167,9 @@ function resolveShellCommand(shellKind) {
  * @param {string} statName
  * @param {string} failureLabel
  * @param {{ id: number, depth: number } | null} parentStat
+ * @param {'null' | 'inherit'} [stdinMode]
  */
-function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statName, failureLabel, parentStat) {
+function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statName, failureLabel, parentStat, stdinMode = 'null') {
     const start = Date.now();
     const stat = addStat({
         type: statType,
@@ -112,15 +186,36 @@ function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statNam
                 args,
                 cwd: siteRoot,
                 env: buildEnvironment(envVars),
-                stdin: 'null',
+                stdin: stdinMode,
                 stdout: 'inherit',
                 stderr: 'inherit',
             }).spawn();
 
+            registerActiveProcess(child, stat);
+
+            let finalized = false;
+
+            const finalize = () => {
+                if (finalized) {
+                    return;
+                }
+
+                finalized = true;
+                unregisterActiveProcess(child);
+            };
+
             child.status.then((result) => {
                 const duration = Date.now() - start;
-                const status = result.success ? 'PASS' : 'FAIL';
                 stat.duration = duration;
+                finalize();
+
+                if (shutdownRequested) {
+                    stat.status = 'INTERRUPTED';
+                    reject(new Error('Execution interrupted.'));
+                    return;
+                }
+
+                const status = result.success ? 'PASS' : 'FAIL';
                 stat.status = status;
 
                 if (result.success) {
@@ -128,7 +223,19 @@ function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statNam
                 } else {
                     reject(new Error(`${failureLabel} failed with code ${result.code}`));
                 }
-            }).catch(reject);
+            }).catch((error) => {
+                stat.duration = Date.now() - start;
+                finalize();
+
+                if (shutdownRequested) {
+                    stat.status = 'INTERRUPTED';
+                    reject(new Error('Execution interrupted.'));
+                    return;
+                }
+
+                stat.status = 'FAIL';
+                reject(error);
+            });
         } catch (error) {
             reject(error);
         }
@@ -143,8 +250,9 @@ function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statNam
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
  * @param {{ id: number, depth: number } | null} parentStat
+ * @param {'null' | 'inherit'} [stdinMode]
  */
-function executeShell(shellKind, command, siteRoot, envVars, parentStat) {
+function executeShell(shellKind, command, siteRoot, envVars, parentStat, stdinMode = 'null') {
     const cleanCommand = command.replace(/\n/g, ' ');
     const shell = resolveShellCommand(shellKind);
     console.log(`\x1b[36m> ${formatCommandForDisplay([shell.command, ...shell.args, cleanCommand])}\x1b[0m`);
@@ -157,7 +265,8 @@ function executeShell(shellKind, command, siteRoot, envVars, parentStat) {
         'CMD',
         `${shellKind}: ${cleanCommand}`,
         'Command',
-        parentStat
+        parentStat,
+        stdinMode
     );
 }
 
@@ -169,8 +278,9 @@ function executeShell(shellKind, command, siteRoot, envVars, parentStat) {
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
  * @param {{ id: number, depth: number } | null} parentStat
+ * @param {'null' | 'inherit'} [stdinMode]
  */
-function executePath(executable, args, siteRoot, envVars, parentStat) {
+function executePath(executable, args, siteRoot, envVars, parentStat, stdinMode = 'null') {
     const commandParts = [executable, ...args];
     console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
@@ -182,7 +292,8 @@ function executePath(executable, args, siteRoot, envVars, parentStat) {
         'PATH',
         formatCommandForDisplay(commandParts),
         'PATH command',
-        parentStat
+        parentStat,
+        stdinMode
     );
 }
 
@@ -194,8 +305,9 @@ function executePath(executable, args, siteRoot, envVars, parentStat) {
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
  * @param {{ id: number, depth: number } | null} parentStat
+ * @param {'null' | 'inherit'} [stdinMode]
  */
-function executeDenoTool(tool, args, siteRoot, envVars, parentStat) {
+function executeDenoTool(tool, args, siteRoot, envVars, parentStat, stdinMode = 'null') {
     const commandParts = [denoExecutable, 'run', '-A', tool.executeSpec, ...args];
     console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
@@ -207,8 +319,35 @@ function executeDenoTool(tool, args, siteRoot, envVars, parentStat) {
         'TOOL',
         `${tool.label} ${args.join(' ')}`.trim(),
         'Tool',
-        parentStat
+        parentStat,
+        stdinMode
     );
+}
+
+/**
+ * @param {unknown} step
+ * @param {ExecutionContext} context
+ * @param {{ id: number, depth: number } | null} parentStat
+ */
+async function runTaskStep(step, context, parentStat) {
+    if (typeof step === 'string') {
+        await runCommandOrTask(step, context, parentStat);
+        return;
+    }
+
+    if (step && typeof step === 'object') {
+        if (typeof step.cmd === 'string') {
+            await runCommandOrTask(step.cmd, context, parentStat, step.interactive === true);
+            return;
+        }
+
+        if (typeof step.script === 'string') {
+            await runCommandOrTask(step.script, context, parentStat, step.interactive === true);
+            return;
+        }
+    }
+
+    throw new Error(`Unsupported step type: ${typeof step}`);
 }
 
 /**
@@ -233,9 +372,13 @@ function createChildExecutionContext(context, parentStat) {
  * @param {ExecutionContext} context
  * @param {{ id: number, depth: number } | null} parentStat
  */
-async function runCommandOrTask(value, context, parentStat) {
+async function runCommandOrTask(value, context, parentStat, interactive = false) {
     if (typeof value !== 'string') {
         throw new Error(`Unsupported step type: ${typeof value}`);
+    }
+
+    if (shutdownRequested) {
+        throw new Error('Execution interrupted.');
     }
 
     const injectedCommand = injectVariables(value, context.variables);
@@ -256,7 +399,8 @@ async function runCommandOrTask(value, context, parentStat) {
             classification.args ?? [],
             context.siteRoot,
             undefined,
-            parentStat
+            parentStat,
+            interactive ? 'inherit' : 'null'
         );
         return;
     }
@@ -267,12 +411,13 @@ async function runCommandOrTask(value, context, parentStat) {
             classification.args ?? [],
             context.siteRoot,
             undefined,
-            parentStat
+            parentStat,
+            interactive ? 'inherit' : 'null'
         );
         return;
     }
 
-    await executeShell(classification.shellKind ?? 'cross-shell', classification.rawCommand, context.siteRoot, undefined, parentStat);
+    await executeShell(classification.shellKind ?? 'cross-shell', classification.rawCommand, context.siteRoot, undefined, parentStat, interactive ? 'inherit' : 'null');
 }
 
 /**
@@ -298,6 +443,11 @@ export async function runTask(taskName, context) {
     });
 
     try {
+        if (shutdownRequested) {
+            status = 'INTERRUPTED';
+            throw new Error('Execution interrupted.');
+        }
+
         const task = context.scripts[taskName];
 
         if (!task) {
@@ -312,7 +462,12 @@ export async function runTask(taskName, context) {
 
         if (Array.isArray(task)) {
             for (const step of task) {
-                await runCommandOrTask(step, context, taskStat);
+                if (shutdownRequested) {
+                    status = 'INTERRUPTED';
+                    throw new Error('Execution interrupted.');
+                }
+
+                await runTaskStep(step, context, taskStat);
             }
             status = 'PASS';
             return;
@@ -321,7 +476,7 @@ export async function runTask(taskName, context) {
         if (typeof task === 'object') {
             if (task.parallel && Array.isArray(task.parallel)) {
                 console.log(`\x1b[33m[Parallel] Starting: ${task.parallel.join(', ')}\x1b[0m`);
-                const promises = task.parallel.map((t) => runCommandOrTask(t, context, taskStat));
+                const promises = task.parallel.map((t) => runTaskStep(t, context, taskStat));
                 const results = await Promise.allSettled(promises);
                 const rejectedResult = results.find((result) => result.status === 'rejected');
 
@@ -335,14 +490,19 @@ export async function runTask(taskName, context) {
 
             if (task.series && Array.isArray(task.series)) {
                 for (const subTask of task.series) {
-                    await runCommandOrTask(subTask, context, taskStat);
+                    if (shutdownRequested) {
+                        status = 'INTERRUPTED';
+                        throw new Error('Execution interrupted.');
+                    }
+
+                    await runTaskStep(subTask, context, taskStat);
                 }
                 status = 'PASS';
                 return;
             }
 
             if (task.cmd || task.script) {
-                await runCommandOrTask(task.cmd || task.script, context, taskStat);
+                await runCommandOrTask(task.cmd || task.script, context, taskStat, task.interactive === true);
                 status = 'PASS';
                 return;
             }
@@ -352,6 +512,6 @@ export async function runTask(taskName, context) {
     } finally {
         const duration = Date.now() - start;
         taskStat.duration = duration;
-        taskStat.status = status;
+        taskStat.status = shutdownRequested && status !== 'PASS' ? 'INTERRUPTED' : status;
     }
 }

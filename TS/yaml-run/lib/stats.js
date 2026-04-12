@@ -65,6 +65,9 @@ function formatStatus(status) {
         case 'RUNNING': {
             return `${ANSI_DIM}${colorize(status.padEnd(7), 'yellow', true)}${ANSI_RESET}`;
         }
+        case 'INTERRUPTED': {
+            return colorize(status.padEnd(7), 'yellow', true);
+        }
         default: {
             return colorize(status.padEnd(7), 'gray', true);
         }
@@ -124,8 +127,8 @@ function getChildrenByParentId() {
 /**
  * Records a task, tool, PATH command, or shell command execution node.
  *
- * @param {{ type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId?: number | null, depth?: number, status?: 'RUNNING' | 'PASS' | 'FAIL', duration?: number }} stat
- * @returns {{ id: number, sequence: number, type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId: number | null, depth: number, status: 'RUNNING' | 'PASS' | 'FAIL', duration: number }}
+ * @param {{ type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId?: number | null, depth?: number, status?: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration?: number }} stat
+ * @returns {{ id: number, sequence: number, type: 'TASK' | 'CMD' | 'PATH' | 'TOOL', name: string, parentId: number | null, depth: number, status: 'RUNNING' | 'PASS' | 'FAIL' | 'INTERRUPTED', duration: number }}
  */
 export function addStat(stat) {
     const record = {

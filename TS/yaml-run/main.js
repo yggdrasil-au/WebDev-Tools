@@ -4,7 +4,7 @@ import yaml from "npm:js-yaml@^4.1.1";
 import { createConfigFiles, findSiteRoot } from './lib/constants.js';
 import { loadVariables } from './lib/config.js';
 import { buildToolCatalog } from './lib/resolution.js';
-import { runTask } from './lib/executor.js';
+import { isShutdownRequested, requestShutdown, runTask, waitForShutdown } from './lib/executor.js';
 import { validateScripts } from './lib/validation.js';
 import { printStatsSummary } from './lib/stats.js';
 
@@ -18,6 +18,19 @@ async function main() {
     }
 
     const taskName = args[0];
+    let interrupted = false;
+
+    const onSignal = () => {
+        if (!interrupted) {
+            interrupted = true;
+            console.warn('\x1b[33m[Interrupted] Stopping active tasks...\x1b[0m');
+        }
+
+        requestShutdown();
+    };
+
+    Deno.addSignalListener('SIGINT', onSignal);
+    Deno.addSignalListener('SIGTERM', onSignal);
 
     try {
         const siteRoot = await findSiteRoot(Deno.cwd());
@@ -43,12 +56,23 @@ async function main() {
             variables,
             toolCatalog,
         });
-        return 0;
+
+        return isShutdownRequested() || interrupted ? 130 : 0;
 
     } catch (err) {
+        if (isShutdownRequested() || interrupted) {
+            return 130;
+        }
+
         console.error(`\x1b[31m[Error] ${err instanceof Error ? err.message : String(err)}\x1b[0m`);
         return 1;
     } finally {
+        if (isShutdownRequested() || interrupted) {
+            await waitForShutdown();
+        }
+
+        Deno.removeSignalListener('SIGINT', onSignal);
+        Deno.removeSignalListener('SIGTERM', onSignal);
         printStatsSummary(Date.now() - startTotal);
     }
 }

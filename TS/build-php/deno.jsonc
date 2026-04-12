@@ -1,0 +1,17 @@
+{
+    "name": "@yggdrasil-au/build-php",
+    "version": "0.2.0",
+    "main": "build-php.ts",
+    "type": "module",
+    "author": "Yggdrasil",
+    "license": "ISC",
+    "tasks": {
+        "start": "deno run --allow-read --allow-run --allow-write build-php.ts",
+        "build": "deno run --allow-read --allow-run --allow-write build-php.ts full",
+        "pre": "deno run --allow-read --allow-run --allow-write build-php.ts pre",
+        "post": "deno run --allow-read --allow-run --allow-write build-php.ts post"
+    },
+    "exports": {
+        ".": "./build-php.ts"
+    }
+}

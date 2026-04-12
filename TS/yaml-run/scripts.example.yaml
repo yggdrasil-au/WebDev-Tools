@@ -77,6 +77,22 @@ scripts:
   # Direct PATH execution example
   path-example: "path: deno run --allow-read ./script.mjs"
 
+  # Interactive foreground example
+  # --------------------------------
+  # This works because yaml-run recognizes the object shape, reads `cmd`,
+  # and then applies `interactive: true` to inherit stdin for that step.
+  # That lets the child process read Enter/Ctrl+C from the terminal.
+  dev-apache-server:
+    cmd: "workspace: apache-cli start --output --document-root ./{{paths.web_root}} --port 8080"
+    interactive: true
+
+  # This does not work because `workspace:` is just a string command prefix.
+  # yaml-run only reads `interactive` from task objects that use `cmd` or `script`,
+  # so putting `interactive: true` beside a `workspace:` string is not a supported task shape.
+  # dev-apache-server:
+  #   workspace: "apache-cli start --output --document-root ./{{paths.web_root}} --port 8080"
+  #   interactive: true
+
   # Shell operator example that still resolves an internal task first
   usage-pass: "cross-shell: yaml-run clean && echo done"
 

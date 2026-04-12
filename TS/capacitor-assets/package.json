@@ -5,6 +5,7 @@
   "homepage": "https://ionicframework.com",
   "author": "Ionic Team <hi@ionicframework.com>",
   "license": "MIT",
+  "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "engines": {
