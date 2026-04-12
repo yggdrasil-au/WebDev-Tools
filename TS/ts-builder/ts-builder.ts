@@ -1,77 +1,147 @@
 #!/usr/bin/env -S deno run --allow-env --allow-read --allow-run --allow-write
+
+/**
+ * TS-Builder
+ * A Deno script to bundle TypeScript files into browser-ready JS.
+ * * Features:
+ * - Recursive directory traversal.
+ * - Supports custom banners with ${year} and ${version} templates.
+ * - Source map toggling.
+ * - Automatically ignores files starting with an underscore (e.g., _utils.ts).
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { nodeResolve } from 'npm:@rollup/plugin-node-resolve@^16.0.3'
-import typescript from 'npm:@rollup/plugin-typescript@^12.3.0'
-import { rollup } from 'npm:rollup@^4.59.0'
-import type { Plugin } from 'npm:rollup@^4.59.0'
-
-interface PackageBannerConfig {
-    banner?: string
-}
-
-interface PackageJson {
-    buildConfig?: PackageBannerConfig
-}
-
-interface TypeScriptPluginOptions {
-    tsconfig: string
-    sourceMap: boolean
-}
-
 const root: string = Deno.cwd()
-const pkgPathCandidates: string[] = [
-    path.resolve(root, 'package.json'),
-    path.resolve(root, '.package.json'),
-]
-const pkgPath: string | undefined = pkgPathCandidates.find((candidate: string) => fs.existsSync(candidate))
+const year: number = new Date().getFullYear()
 
-if (!pkgPath) {
-    console.error('Error: package.json or .package.json not found in current directory.')
+/**
+ * Represents the configuration options parsed from CLI arguments.
+ */
+interface BuildOptions {
+    banner: string;
+    srcDir: string;
+    outDir: string;
+    noSourceMap: boolean;
+}
+
+/**
+ * Parses command line arguments to configure the build process.
+ * * @param args - Deno.args array
+ * @returns Parsed BuildOptions object
+ * @example ts-builder "/* v${version} *\/" -i ./src -o ./dist
+ */
+function getArgs(args: string[]): BuildOptions {
+    let _banner: string | undefined
+    let _srcDir: string | undefined
+    let _outDir: string | undefined
+    const noSourceMap: boolean = args.includes('--no-source-map') || args.includes('--no-sourcemap')
+
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i]
+        if (arg === '--inputDir' || arg === '-i') {
+            _srcDir = path.resolve(root, args[++i])
+        } else if (arg === '--outputDir' || arg === '-o') {
+            _outDir = path.resolve(root, args[++i])
+        } else if (!arg.startsWith('-')) {
+            // Treat non-flag arguments as part of the banner string
+            _banner = (_banner ? _banner + ' ' : '') + arg
+        }
+    }
+
+    return {
+        banner: _banner || '',
+        srcDir: _srcDir || path.resolve(root, 'source/ts'),
+        outDir: _outDir || path.resolve(root, 'www/dist/js'),
+        noSourceMap
+    }
+}
+
+const { banner: bannerArgument, srcDir, outDir, noSourceMap } = getArgs(Deno.args)
+
+if (!srcDir || !outDir) {
+    console.error('Usage: ts-builder <banner> --inputDir <src> --outputDir <dist>')
     Deno.exit(1)
 }
 
-const pkg: PackageJson = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as PackageJson
-const year: number = new Date().getFullYear()
-const srcDir: string = path.resolve(root, 'source/ts')
-const outDir: string = path.resolve(root, 'www/dist/js')
-const noSourceMap: boolean = Deno.args.includes('--no-source-map') || Deno.args.includes('--no-sourcemap')
-const createTypeScriptPlugin = typescript as unknown as (options: TypeScriptPluginOptions) => Plugin
+// Extract version from deno.jsonc if available
+const denoConfigPath: string = path.resolve(root, 'deno.jsonc')
+const denoConfigText: string = fs.existsSync(denoConfigPath) ? fs.readFileSync(denoConfigPath, 'utf-8') : ''
+const siteVersionMatch: RegExpMatchArray | null = denoConfigText.match(/"version"\s*:\s*"([^"]+)"/)
+const siteVersion: string | undefined = siteVersionMatch ? siteVersionMatch[1] : undefined
 
-function getBanner(packageJson: PackageJson): string {
-    if (!packageJson.buildConfig || !packageJson.buildConfig.banner) {
-        return ''
-    }
+const banner: string = getBanner(bannerArgument ?? '')
+const denoExecutable: string = Deno.execPath()
 
-    const banner: string = packageJson.buildConfig.banner
+/**
+ * Processes the banner template by replacing ${year} and ${version} tokens.
+ */
+function getBanner(bannerTemplate: string): string {
+    if (!bannerTemplate) return ''
 
-    return banner.replace(/\$\{(.+?)\}/g, (match: string, token: string) => {
-        if (token === 'year') {
-            return String(year)
-        }
-
-        const keys: string[] = token.split('.')
-        let value: unknown = packageJson as unknown
-
-        for (const key of keys) {
-            if (value && typeof value === 'object' && key in (value as Record<string, unknown>)) {
-                value = (value as Record<string, unknown>)[key]
-            } else {
-                return match
-            }
-        }
-
-        return typeof value === 'string' ? value : String(value)
+    return bannerTemplate.replace(/\$\{(.+?)\}/g, (match: string, token: string) => {
+        if (token === 'year') return String(year)
+        if (token === 'version') return siteVersion || match
+        return match
     })
 }
 
-const banner: string = getBanner(pkg)
+/**
+ * Constructs the command line arguments for the 'deno bundle' subprocess.
+ */
+function createBundleArgs(inputFile: string, outputFile: string): string[] {
+    const args: string[] = [
+        'bundle',
+        '--no-check',
+        '--platform=browser',
+        '--format=iife',
+        '--packages=bundle',
+        '--node-modules-dir=auto',
+        '--output',
+        outputFile,
+    ]
 
-function findTSFiles(dir: string): string[] {
-    if (!fs.existsSync(dir)) {
-        return []
+    if (!noSourceMap) {
+        args.push('--sourcemap=linked')
     }
+
+    args.push(inputFile)
+    return args
+}
+
+/**
+ * Executes the bundling process for a single file and prepends the banner.
+ */
+async function bundleFile(inputFile: string, outputFile: string): Promise<void> {
+    const command = new Deno.Command(denoExecutable, {
+        args: createBundleArgs(inputFile, outputFile),
+        stdout: 'piped',
+        stderr: 'piped',
+    })
+
+    const result: Deno.CommandOutput = await command.output()
+
+    if (result.code !== 0) {
+        const stderr: string = new TextDecoder().decode(result.stderr).trim()
+        const stdout: string = new TextDecoder().decode(result.stdout).trim()
+        const details: string = stderr || stdout || `deno bundle failed with exit code ${result.code}`
+
+        throw new Error(`Failed to bundle ${inputFile}.\n${details}`)
+    }
+
+    if (banner) {
+        const bundledContent: string = fs.readFileSync(outputFile, 'utf-8')
+        fs.writeFileSync(outputFile, `${banner}\n${bundledContent}`)
+    }
+}
+
+/**
+ * Recursively finds all .ts files in a directory.
+ * Files starting with an underscore (_) are ignored (treated as private/partials).
+ */
+function findTSFiles(dir: string): string[] {
+    if (!fs.existsSync(dir)) return []
 
     let results: string[] = []
     const list: fs.Dirent[] = fs.readdirSync(dir, { withFileTypes: true })
@@ -81,7 +151,11 @@ function findTSFiles(dir: string): string[] {
 
         if (entry.isDirectory()) {
             results = results.concat(findTSFiles(fullPath))
-        } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.startsWith('_')) {
+        } else if (
+            entry.isFile() &&
+            entry.name.endsWith('.ts') &&
+            !entry.name.startsWith('_')
+        ) {
             results.push(fullPath)
         }
     }
@@ -89,52 +163,28 @@ function findTSFiles(dir: string): string[] {
     return results
 }
 
+/**
+ * Maps an input TypeScript file to its output JavaScript destination and triggers bundling.
+ */
 async function buildFile(inputFile: string): Promise<void> {
     const relativePath: string = path.relative(srcDir, inputFile)
-    const isServiceWorker: boolean = path.basename(inputFile) === 'service-worker.ts'
-    const isRegisterSW: boolean = path.basename(inputFile) === 'register-service-worker.ts'
-    let outputFile: string
+    const outputFile: string = path.join(outDir, relativePath).replace(/\.ts$/, '.js')
 
-    if (isServiceWorker) {
-        outputFile = path.resolve(root, 'www/dist/service-worker.js')
-    } else {
-        outputFile = path.join(outDir, relativePath).replace(/\.ts$/, '.js')
-    }
-
+    // Ensure target directory exists before writing
     fs.mkdirSync(path.dirname(outputFile), { recursive: true })
 
-    const bundle = await rollup({
-        input: inputFile,
-        external: () => false,
-        plugins: [
-            nodeResolve({ browser: true }),
-            createTypeScriptPlugin({
-                tsconfig: path.resolve(root, 'tsconfig.json'),
-                sourceMap: !noSourceMap,
-            }),
-        ],
-        onwarn(warning, warn) {
-            warn(warning)
-        },
-    })
-
-    await bundle.write({
-        file: outputFile,
-        format: isServiceWorker ? 'iife' : (isRegisterSW ? 'esm' : 'umd'),
-        inlineDynamicImports: true,
-        banner,
-        name: isServiceWorker ? 'ServiceWorker' : path.basename(inputFile, '.ts'),
-        sourcemap: !noSourceMap,
-    })
-
+    await bundleFile(inputFile, outputFile)
     console.log(`Built: ${inputFile} -> ${outputFile}`)
 }
 
+/**
+ * Entry point: Finds all valid TS files and processes them.
+ */
 async function buildAll(): Promise<void> {
     const tsFiles: string[] = findTSFiles(srcDir)
 
     if (tsFiles.length === 0) {
-        console.log('No .ts files found in source/ts')
+        console.log(`No .ts files found in ${srcDir}`)
         return
     }
 
@@ -143,6 +193,7 @@ async function buildAll(): Promise<void> {
     }
 }
 
+// Execution block
 try {
     await buildAll()
 } catch (error) {

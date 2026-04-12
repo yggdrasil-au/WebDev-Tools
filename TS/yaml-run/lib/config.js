@@ -18,6 +18,114 @@ async function pathExists(filePath) {
 }
 
 /**
+ * @param {string} input
+ */
+function stripJsonc(input) {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+
+    for (let i = 0; i < input.length; i++) {
+        const character = input[i];
+        const nextCharacter = input[i + 1];
+
+        if (inLineComment) {
+            if (character === '\n' || character === '\r') {
+                inLineComment = false;
+                output += character;
+            }
+
+            continue;
+        }
+
+        if (inBlockComment) {
+            if (character === '*' && nextCharacter === '/') {
+                inBlockComment = false;
+                i++;
+            }
+
+            continue;
+        }
+
+        if (inString) {
+            output += character;
+
+            if (escaped) {
+                escaped = false;
+            } else if (character === '\\') {
+                escaped = true;
+            } else if (character === '"') {
+                inString = false;
+            }
+
+            continue;
+        }
+
+        if (character === '"') {
+            inString = true;
+            output += character;
+            continue;
+        }
+
+        if (character === '/' && nextCharacter === '/') {
+            inLineComment = true;
+            i++;
+            continue;
+        }
+
+        if (character === '/' && nextCharacter === '*') {
+            inBlockComment = true;
+            i++;
+            continue;
+        }
+
+        output += character;
+    }
+
+    return output.replace(/,\s*([}\]])/g, '$1');
+}
+
+/**
+ * @param {string} filePath
+ */
+async function readJsoncFile(filePath) {
+    const rawText = await Deno.readTextFile(filePath);
+    return JSON.parse(stripJsonc(rawText));
+}
+
+/**
+ * @param {Record<string, unknown>} variables
+ */
+export function assertVariablesResolved(variables) {
+    /** @type {Set<string>} */
+    const unresolvedKeys = new Set();
+
+    for (const value of Object.values(variables)) {
+        if (typeof value !== 'string') {
+            continue;
+        }
+
+        const matches = value.match(/\{\{\s*([^{}]+?)\s*\}\}/g);
+        if (!matches) {
+            continue;
+        }
+
+        for (const match of matches) {
+            const inner = match.slice(2, -2).trim();
+            if (inner.length > 0) {
+                unresolvedKeys.add(inner);
+            }
+        }
+    }
+
+    if (unresolvedKeys.size > 0) {
+        throw new Error(`Unresolved variables: ${Array.from(unresolvedKeys).sort().join(', ')}.`);
+    }
+}
+
+/**
  * Resolves {{placeholders}} inside the merged vars tree.
  *
  * Supported placeholder keys:
@@ -243,6 +351,8 @@ export async function loadVariables(siteRoot = Deno.cwd()) {
 
             if (absolutePath.endsWith('.json')) {
                 mergedData[scope] = JSON.parse(await Deno.readTextFile(absolutePath));
+            } else if (absolutePath.endsWith('.jsonc')) {
+                mergedData[scope] = await readJsoncFile(absolutePath);
             } else if (absolutePath.endsWith('.js') || absolutePath.endsWith('.mjs')) {
                 // Dynamic import for JS files
                 const mod = await import(pathToFileURL(absolutePath).href);

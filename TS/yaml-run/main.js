@@ -2,7 +2,7 @@
 
 import yaml from "npm:js-yaml@^4.1.1";
 import { createConfigFiles, findSiteRoot } from './lib/constants.js';
-import { loadVariables } from './lib/config.js';
+import { assertVariablesResolved, loadVariables } from './lib/config.js';
 import { buildToolCatalog } from './lib/resolution.js';
 import { isShutdownRequested, requestShutdown, runTask, waitForShutdown } from './lib/executor.js';
 import { validateScripts } from './lib/validation.js';
@@ -37,6 +37,7 @@ async function main() {
         const configFiles = createConfigFiles(siteRoot);
         const scriptConfig = yaml.load(await Deno.readTextFile(configFiles.scripts))?.scripts || {};
         const variables = await loadVariables(siteRoot);
+        assertVariablesResolved(variables);
         const toolCatalog = await buildToolCatalog(siteRoot);
 
         const validationWarnings = validateScripts({

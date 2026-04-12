@@ -693,9 +693,29 @@ export async function buildToolCatalog(siteRoot) {
 
     for (const packageName of packageNames) {
         const localPackageDirectoryList = localPackageDirectories.get(packageName) ?? [];
-        const localPackageCandidates = toolCatalog.get(packageName) ?? [];
-        if (localPackageDirectoryList.length > 0 && localPackageCandidates.length > 0) {
+        if (localPackageDirectoryList.length > 0) {
+            let hasLocalCandidates = false;
+
+            for (const packageDirectory of localPackageDirectoryList) {
+                const localMetadata = await loadLocalPackageMetadata(packageDirectory);
+                if (!isPlainObject(localMetadata)) {
+                    continue;
+                }
+
+                const packageMetadataName = typeof localMetadata.name === 'string' ? localMetadata.name : packageName;
+                const toolEntries = collectLocalToolEntries(packageMetadataName, localMetadata);
+
+                if (toolEntries.entries.length === 0) {
+                    continue;
+                }
+
+                hasLocalCandidates = true;
+                break;
+            }
+
+            if (hasLocalCandidates) {
                 continue;
+            }
         }
 
         const packageMetadata = await loadPackageMetadata(packageName);
@@ -824,21 +844,48 @@ function findToolMatches(targetName, candidates) {
 /**
  * @param {string} targetName
  * @param {ToolCandidate[]} candidates
+ * @param {boolean} allowMissing
  */
-function resolveExplicitToolTarget(targetName, candidates) {
+function resolveToolTarget(targetName, candidates, allowMissing) {
     const matches = findToolMatches(targetName, candidates);
 
     if (matches.length === 0) {
+        if (allowMissing) {
+            return null;
+        }
+
         throw new Error(`Workspace tool "${targetName}" was not found.`);
     }
 
-    if (matches.length > 1) {
-        throw new Error(
-            `Workspace tool "${targetName}" is ambiguous. Matches: ${describeToolCandidates(matches).join(', ')}.`
-        );
+    const priorityKinds = ['local-package', 'site-bin', 'npm-package'];
+    for (const kind of priorityKinds) {
+        const kindMatches = matches.filter((candidate) => candidate.kind === kind);
+        if (kindMatches.length === 0) {
+            continue;
+        }
+
+        if (kindMatches.length > 1) {
+            throw new Error(
+                `Command "${targetName}" is ambiguous. Matches: ${describeToolCandidates(kindMatches).join(', ')}.`
+            );
+        }
+
+        return kindMatches[0];
     }
 
-    return matches[0];
+    if (allowMissing) {
+        return null;
+    }
+
+    throw new Error(`Workspace tool "${targetName}" was not found.`);
+}
+
+/**
+ * @param {string} targetName
+ * @param {ToolCandidate[]} candidates
+ */
+function resolveExplicitToolTarget(targetName, candidates) {
+    return resolveToolTarget(targetName, candidates, false);
 }
 
 /**
@@ -846,19 +893,7 @@ function resolveExplicitToolTarget(targetName, candidates) {
  * @param {ToolCandidate[]} candidates
  */
 function resolveImplicitToolTarget(targetName, candidates) {
-    const matches = findToolMatches(targetName, candidates);
-
-    if (matches.length === 0) {
-        return null;
-    }
-
-    if (matches.length > 1) {
-        throw new Error(
-            `Command "${targetName}" is ambiguous. Matches: ${describeToolCandidates(matches).join(', ')}.`
-        );
-    }
-
-    return matches[0];
+    return resolveToolTarget(targetName, candidates, true);
 }
 
 /**

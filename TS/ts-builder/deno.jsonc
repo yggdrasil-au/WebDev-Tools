@@ -1,0 +1,8 @@
+{
+    "name": "@yggdrasil-au/ts-builder",
+    "version": "1.4.0",
+    "description": "Shared TypeScript builder script",
+    "exports": {
+        ".": "./ts-builder.ts"
+    }
+}
