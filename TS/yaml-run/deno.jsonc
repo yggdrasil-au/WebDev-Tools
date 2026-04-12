@@ -1,6 +1,10 @@
 {
     "name": "@yggdrasil-au/yaml-run",
-    "version": "1.0.0",
+    "version": "0.1.6",
+    "description": "A lightweight YAML-based task runner with variable injection and workspace support.",
+    "type": "module",
+    "author": "Yggdrasil-au",
+    "license": "Apache-2.0",
     "exports": {
         ".": "./main.js"
     }

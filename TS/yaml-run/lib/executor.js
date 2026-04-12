@@ -27,21 +27,65 @@ function formatCommandForDisplay(commandParts) {
 }
 
 /**
- * Executes a single shell command.
- *
+ * @param {'cross-shell' | 'cmd' | 'powershell' | 'pwsh' | 'bash'} shellKind
+ */
+function resolveShellCommand(shellKind) {
+    switch (shellKind) {
+        case 'cmd': {
+            return {
+                command: 'cmd',
+                args: ['/d', '/s', '/c'],
+            };
+        }
+        case 'powershell': {
+            return {
+                command: 'powershell',
+                args: ['-NoLogo', '-NoProfile', '-Command'],
+            };
+        }
+        case 'pwsh': {
+            return {
+                command: 'pwsh',
+                args: ['-NoLogo', '-NoProfile', '-Command'],
+            };
+        }
+        case 'bash': {
+            return {
+                command: 'bash',
+                args: ['-lc'],
+            };
+        }
+        case 'cross-shell':
+        default: {
+            return isWin
+                ? {
+                    command: 'powershell',
+                    args: ['-NoLogo', '-NoProfile', '-Command'],
+                }
+                : {
+                    command: 'bash',
+                    args: ['-lc'],
+                };
+        }
+    }
+}
+
+/**
  * @param {string} command
+ * @param {string[]} args
  * @param {string} siteRoot
  * @param {Record<string, string>} [envVars]
+ * @param {'CMD' | 'PATH' | 'TOOL'} statType
+ * @param {string} statName
+ * @param {string} failureLabel
  */
-function executeShell(command, siteRoot, envVars) {
+function spawnTrackedProcess(command, args, siteRoot, envVars, statType, statName, failureLabel) {
     const start = Date.now();
-    return new Promise((resolve, reject) => {
-        const cleanCommand = command.replace(/\n/g, ' ');
-        console.log(`\x1b[36m> ${cleanCommand}\x1b[0m`);
 
+    return new Promise((resolve, reject) => {
         try {
-            const child = new Deno.Command(isWin ? 'cmd' : 'sh', {
-                args: isWin ? ['/d', '/s', '/c', cleanCommand] : ['-c', cleanCommand],
+            const child = new Deno.Command(command, {
+                args,
                 cwd: siteRoot,
                 env: buildEnvironment(envVars),
                 stdin: 'null',
@@ -52,18 +96,65 @@ function executeShell(command, siteRoot, envVars) {
             child.status.then((result) => {
                 const duration = Date.now() - start;
                 const status = result.success ? 'PASS' : 'FAIL';
-                addStat({ type: 'CMD', name: cleanCommand, duration, status });
+                addStat({ type: statType, name: statName, duration, status });
 
                 if (result.success) {
                     resolve();
                 } else {
-                    reject(new Error(`Command failed with code ${result.code}`));
+                    reject(new Error(`${failureLabel} failed with code ${result.code}`));
                 }
             }).catch(reject);
         } catch (error) {
             reject(error);
         }
     });
+}
+
+/**
+ * Executes a single shell command.
+ *
+ * @param {'cross-shell' | 'cmd' | 'powershell' | 'pwsh' | 'bash'} shellKind
+ * @param {string} command
+ * @param {string} siteRoot
+ * @param {Record<string, string>} [envVars]
+ */
+function executeShell(shellKind, command, siteRoot, envVars) {
+    const cleanCommand = command.replace(/\n/g, ' ');
+    const shell = resolveShellCommand(shellKind);
+    console.log(`\x1b[36m> ${formatCommandForDisplay([shell.command, ...shell.args, cleanCommand])}\x1b[0m`);
+
+    return spawnTrackedProcess(
+        shell.command,
+        [...shell.args, cleanCommand],
+        siteRoot,
+        envVars,
+        'CMD',
+        `${shellKind}: ${cleanCommand}`,
+        'Command'
+    );
+}
+
+/**
+ * Executes a command directly from PATH.
+ *
+ * @param {string} executable
+ * @param {string[]} args
+ * @param {string} siteRoot
+ * @param {Record<string, string>} [envVars]
+ */
+function executePath(executable, args, siteRoot, envVars) {
+    const commandParts = [executable, ...args];
+    console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
+
+    return spawnTrackedProcess(
+        executable,
+        args,
+        siteRoot,
+        envVars,
+        'PATH',
+        formatCommandForDisplay(commandParts),
+        'PATH command'
+    );
 }
 
 /**
@@ -75,36 +166,18 @@ function executeShell(command, siteRoot, envVars) {
  * @param {Record<string, string>} [envVars]
  */
 function executeDenoTool(tool, args, siteRoot, envVars) {
-    const start = Date.now();
     const commandParts = [denoExecutable, 'run', '-A', tool.executeSpec, ...args];
     console.log(`\x1b[36m> ${formatCommandForDisplay(commandParts)}\x1b[0m`);
 
-    return new Promise((resolve, reject) => {
-        try {
-            const child = new Deno.Command(denoExecutable, {
-                args: ['run', '-A', tool.executeSpec, ...args],
-                cwd: siteRoot,
-                env: buildEnvironment(envVars),
-                stdin: 'null',
-                stdout: 'inherit',
-                stderr: 'inherit',
-            }).spawn();
-
-            child.status.then((result) => {
-                const duration = Date.now() - start;
-                const status = result.success ? 'PASS' : 'FAIL';
-                addStat({ type: 'TOOL', name: `${tool.label} ${args.join(' ')}`.trim(), duration, status });
-
-                if (result.success) {
-                    resolve();
-                } else {
-                    reject(new Error(`Tool failed with code ${result.code}`));
-                }
-            }).catch(reject);
-        } catch (error) {
-            reject(error);
-        }
-    });
+    return spawnTrackedProcess(
+        denoExecutable,
+        ['run', '-A', tool.executeSpec, ...args],
+        siteRoot,
+        envVars,
+        'TOOL',
+        `${tool.label} ${args.join(' ')}`.trim(),
+        'Tool'
+    );
 }
 
 /**
@@ -135,7 +208,16 @@ async function runCommandOrTask(value, context) {
         return;
     }
 
-    await executeShell(classification.rawCommand, context.siteRoot);
+    if (classification.kind === 'path' && classification.executable) {
+        await executePath(
+            classification.executable,
+            classification.args ?? [],
+            context.siteRoot
+        );
+        return;
+    }
+
+    await executeShell(classification.shellKind ?? 'cross-shell', classification.rawCommand, context.siteRoot);
 }
 
 /**

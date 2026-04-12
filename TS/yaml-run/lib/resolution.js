@@ -41,14 +41,29 @@ const IGNORED_DIRECTORIES = new Set([
 
 /**
  * @typedef {{
- *     kind: 'script' | 'tool' | 'shell',
+ *     kind: 'script' | 'tool' | 'shell' | 'path',
  *     rawCommand: string,
  *     firstToken?: string,
  *     args?: string[],
  *     scriptName?: string,
  *     tool?: ToolCandidate,
+ *     executable?: string,
+ *     shellKind?: 'cross-shell' | 'cmd' | 'powershell' | 'pwsh' | 'bash',
+ *     compatibilityAlias?: 'shell',
  * }} CommandClassification
  */
+
+const EXPLICIT_COMMAND_PREFIXES = new Set([
+    'shell',
+    'cross-shell',
+    'cmd',
+    'powershell',
+    'pwsh',
+    'bash',
+    'path',
+    'npm',
+    'workspace',
+]);
 
 async function pathExists(filePath) {
     try {
@@ -183,6 +198,13 @@ function extractNpmPackageName(target) {
     }
 
     return packageName;
+}
+
+/**
+ * @param {string} commandText
+ */
+export function hasShellOperators(commandText) {
+    return /(?:&&|\|\||[|<>;])/u.test(commandText);
 }
 
 /**
@@ -783,10 +805,10 @@ function splitExplicitCommand(commandText) {
         return null;
     }
 
-    const prefix = commandText.slice(0, colonIndex).trim();
+    const prefix = commandText.slice(0, colonIndex).trim().toLowerCase();
     const remainder = commandText.slice(colonIndex + 1).trimStart();
 
-    if (prefix === 'shell' || prefix === 'npm' || prefix === 'workspace') {
+    if (EXPLICIT_COMMAND_PREFIXES.has(prefix)) {
         return { prefix, remainder };
     }
 
@@ -807,24 +829,41 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
         return {
             kind: 'shell',
             rawCommand: trimmedCommand,
-        };
-    }
-
-    if (Object.prototype.hasOwnProperty.call(scriptConfig, trimmedCommand)) {
-        return {
-            kind: 'script',
-            rawCommand: trimmedCommand,
-            scriptName: trimmedCommand,
+            shellKind: 'cross-shell',
         };
     }
 
     const explicitCommand = splitExplicitCommand(trimmedCommand);
     if (explicitCommand) {
         const explicitTokens = tokenizeCommand(explicitCommand.remainder);
-        if (explicitCommand.prefix === 'shell') {
+        if (explicitCommand.prefix === 'shell' || explicitCommand.prefix === 'cross-shell') {
             return {
                 kind: 'shell',
                 rawCommand: explicitCommand.remainder,
+                shellKind: 'cross-shell',
+                ...(explicitCommand.prefix === 'shell' ? { compatibilityAlias: 'shell' } : {}),
+            };
+        }
+
+        if (explicitCommand.prefix === 'cmd' || explicitCommand.prefix === 'powershell' || explicitCommand.prefix === 'pwsh' || explicitCommand.prefix === 'bash') {
+            return {
+                kind: 'shell',
+                rawCommand: explicitCommand.remainder,
+                shellKind: explicitCommand.prefix,
+            };
+        }
+
+        if (explicitCommand.prefix === 'path') {
+            if (!explicitTokens || explicitTokens.length === 0) {
+                throw new Error(`Command "${trimmedCommand}" is missing a target.`);
+            }
+
+            return {
+                kind: 'path',
+                rawCommand: explicitCommand.remainder,
+                executable: explicitTokens[0],
+                firstToken: explicitTokens[0],
+                args: explicitTokens.slice(1),
             };
         }
 
@@ -862,31 +901,26 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
         };
     }
 
+    if (Object.prototype.hasOwnProperty.call(scriptConfig, trimmedCommand)) {
+        return {
+            kind: 'script',
+            rawCommand: trimmedCommand,
+            scriptName: trimmedCommand,
+        };
+    }
+
     const tokens = tokenizeCommand(trimmedCommand);
     if (!tokens || tokens.length === 0) {
         return {
             kind: 'shell',
             rawCommand: trimmedCommand,
-        };
-    }
-
-    const firstToken = tokens[0];
-
-    if (Object.prototype.hasOwnProperty.call(scriptConfig, firstToken)) {
-        return {
-            kind: 'script',
-            rawCommand: trimmedCommand,
-            firstToken,
-            args: tokens.slice(1),
-            scriptName: firstToken,
+            shellKind: 'cross-shell',
         };
     }
 
     return {
-        kind: 'script',
+        kind: 'shell',
         rawCommand: trimmedCommand,
-        firstToken,
-        args: tokens.slice(1),
-        scriptName: firstToken,
+        shellKind: 'cross-shell',
     };
 }

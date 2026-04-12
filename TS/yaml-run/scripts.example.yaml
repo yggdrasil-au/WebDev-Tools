@@ -13,7 +13,7 @@ scripts:
   # =================================================================
   # Any simple string is treated as a command.
   # Variable placeholders {{...}} are replaced before execution.
-  clean: "rimraf {{paths.dist}}"
+  clean: "npm:rimraf {{paths.dist}}"
 
   # =================================================================
   # 2. Sequential Execution (Series)
@@ -22,15 +22,14 @@ scripts:
   # If any command fails (exit code != 0), the sequence stops.
   build:
     - clean                       # References the 'clean' task above
-    - "mkdir {{paths.dist}}"      # Raw shell command
-    - "tsc {{commands.build_flags}}"
+    - "path: tsc {{commands.build_flags}}"
 
   # Explicit 'series' object syntax (Functionally identical to the list above)
   # Useful if you prefer explicit labeling.
   build:explicit:
     series:
       - clean
-      - "tsc"
+      - "path: tsc"
 
   # =================================================================
   # 3. Parallel Execution
@@ -38,8 +37,8 @@ scripts:
   # Use the 'parallel' key to run tasks simultaneously.
   lint:
     parallel:
-      - "eslint {{paths.src}}/**"
-      - "stylelint {{paths.src}}/**/*.css"
+      - "path: eslint {{paths.src}}/**"
+      - "path: stylelint {{paths.src}}/**/*.css"
 
   # =================================================================
   # 4. Combinations
@@ -49,30 +48,35 @@ scripts:
     series:
       - build                     # Run build (series)
       - lint                      # Run lint (parallel)
-      - "echo Deploying {{project.name}}..."
+      - "cross-shell: echo Deploying {{project.name}}..."
 
   # =================================================================
-  # 5. IMPORTANT: Internal Tasks vs. Shell Commands
+  # 5. IMPORTANT: Explicit Command Tags
   # =================================================================
-  # The runner makes a decision for every step:
+  # The runner now uses explicit prefixes instead of an ambiguous shell fallback.
   #
-  # A) Is it an Internal Task?
-  #    If the string has NO spaces and NO shell operators (&&, ||, ;, |),
-  #    it looks for a matching key in this file.
+  # Use `path:` for executables that should be launched directly from PATH.
   #
-  # B) Is it a Shell Command?
-  #    If the string has spaces or operators, it is passed DIRECTLY
-  #    to your system shell (bash/powershell/cmd).
+  # Use `cmd:`, `powershell:`, `pwsh:`, or `bash:` when shell syntax is required.
+  # Use `cross-shell:` when the command should run through the OS-appropriate shell.
+  #
+  # Validation will warn if a command is shell-specific on the current platform
+  # or if a shell wrapper could be replaced by a portable alternative.
 
-  # Example: Working with Shell Operators
+  # Example: Platform-specific shell commands
   # -------------------------------------
 
-  # WRONG:
-  # The shell receives "clean && echo done".
-  # usage-fail: "clean && echo done"
-  # -> Fails because 'clean' is a YAML task, not a system executable on your PATH.
+  # Windows shell examples
+  cmd-example: "cmd: dir"
+  powershell-example: "powershell: Get-ChildItem"
+  pwsh-example: "pwsh: Get-ChildItem"
 
-  # CORRECT:
-  # Call the CLI tool explicitly to resolve the internal task inside a shell string.
-  usage-pass: "yaml-run clean && echo done"
+  # Unix shell example
+  bash-example: "bash: rm -rf ./dist"
+
+  # Direct PATH execution example
+  path-example: "path: deno run --allow-read ./script.mjs"
+
+  # Shell operator example that still resolves an internal task first
+  usage-pass: "cross-shell: yaml-run clean && echo done"
 
