@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
-import * as net from 'node:net';
+import process from 'node:process';
 
-import { SpawnProcessResult } from './types.js';
+import type { SpawnProcessResult } from './types.ts';
 
 /* :: :: Process Helpers :: START :: */
 
@@ -9,35 +8,20 @@ export async function spawnProcessAndCollect (
     command: string,
     args: string[]
 ): Promise<SpawnProcessResult> {
-    return new Promise<SpawnProcessResult>((resolve, reject) => {
-        const child = spawn(command, args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            windowsHide: true,
-        });
+    const output: Deno.CommandOutput = await new Deno.Command(command, {
+        args,
+        stdin: 'null',
+        stdout: 'piped',
+        stderr: 'piped',
+    }).output();
 
-        let stdout: string = '';
-        let stderr: string = '';
+    const decoder: TextDecoder = new TextDecoder();
 
-        child.stdout.on('data', (chunk: Buffer) => {
-            stdout += chunk.toString();
-        });
-
-        child.stderr.on('data', (chunk: Buffer) => {
-            stderr += chunk.toString();
-        });
-
-        child.on('error', (error: Error) => {
-            reject(error);
-        });
-
-        child.on('close', (exitCode: number | null) => {
-            resolve({
-                exitCode: exitCode ?? 1,
-                stdout: stdout.trim(),
-                stderr: stderr.trim(),
-            });
-        });
-    });
+    return {
+        exitCode: output.code ?? 1,
+        stdout: decoder.decode(output.stdout).trim(),
+        stderr: decoder.decode(output.stderr).trim(),
+    };
 }
 
 export function isProcessAlive (
@@ -87,35 +71,30 @@ export async function terminateProcessByPid (
     }
 }
 
-async function canBindToPort (
+function canBindToPort (
     port: number,
     host: string
-): Promise<boolean> {
-    return new Promise<boolean>((resolve, reject) => {
-        const server: net.Server = net.createServer();
+): boolean {
+    let listener: Deno.TcpListener | null = null;
 
-        server.once('error', (error: NodeJS.ErrnoException) => {
-            if (error.code === 'EADDRINUSE') {
-                resolve(false);
-                return;
-            }
-
-            reject(error);
+    try {
+        listener = Deno.listen({
+            port,
+            hostname: host,
         });
+        return true;
+    } catch (error: unknown) {
+        const errorCode: string | undefined = (error as { code?: string }).code;
+        if (errorCode === 'EADDRINUSE' || error instanceof Deno.errors.AddrInUse) {
+            return false;
+        }
 
-        server.once('listening', () => {
-            server.close((closeError?: Error) => {
-                if (closeError) {
-                    reject(closeError);
-                    return;
-                }
-
-                resolve(true);
-            });
-        });
-
-        server.listen({ port, host, exclusive: true });
-    });
+        throw error;
+    } finally {
+        if (listener) {
+            listener.close();
+        }
+    }
 }
 
 export async function isPortAvailable (

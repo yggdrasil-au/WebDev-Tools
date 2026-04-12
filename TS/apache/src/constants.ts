@@ -18,6 +18,7 @@ export const PHP_ZIP_PATH: string = path.join(RUNTIME_DIR, 'php.zip');
 
 export const PROCESS_REGISTRY_PATH: string = path.join(RUNTIME_DIR, 'apache-processes.json');
 export const VHOST_REGISTRY_PATH: string = path.join(RUNTIME_DIR, 'apache-vhosts.json');
+export const MANAGED_DOCUMENT_ROOT_CONF_PATH: string = path.join(APACHE_DIR, 'conf', 'extra', 'apache-cli-document-root.conf');
 
 export const HTTPD_CONF_PATH: string = path.join(APACHE_DIR, 'conf', 'httpd.conf');
 export const VHOSTS_CONF_PATH: string = path.join(APACHE_DIR, 'conf', 'extra', 'httpd-vhosts.conf');

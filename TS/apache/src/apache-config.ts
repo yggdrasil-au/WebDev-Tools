@@ -3,20 +3,21 @@ import * as fsPromises from 'node:fs/promises';
 import {
     APACHE_DIR,
     CORE_LISTEN_PORT_START,
+    MANAGED_DOCUMENT_ROOT_CONF_PATH,
     PHP_DIR,
     VHOSTS_CONF_PATH,
-} from './constants.js';
-import {
+} from './constants.ts';
+import type {
     TrackedVHost,
-} from './types.js';
+} from './types.ts';
 import {
     normalizePathForApache,
-} from './utils.js';
+} from './utils.ts';
 
 /* :: :: Apache Config Helpers :: START :: */
 
 const CORE_LISTEN_MARKER: string = '# Apache CLI managed core listener';
-const REQUESTED_LISTEN_MARKER: string = '# Apache CLI managed requested listener';
+const MANAGED_DOCUMENT_ROOT_INCLUDE_MARKER: string = '# Apache CLI managed document root include';
 const DOCUMENT_ROOT_MARKER_START: string = '# Apache CLI managed document root start';
 const DOCUMENT_ROOT_MARKER_END: string = '# Apache CLI managed document root end';
 
@@ -42,13 +43,82 @@ function renderVHost (
         `    ErrorLog "logs/apache-cli-${vhost.id}-error.log"`,
         `    CustomLog "logs/apache-cli-${vhost.id}-access.log" common`,
         `    <Directory "${safeDocumentRoot}">`,
-        '        AllowOverride None',
+        '        AllowOverride All',
         '        Require all granted',
         '    </Directory>',
         '</VirtualHost>',
         `# Apache CLI managed host end: ${vhost.id}`,
         '',
     ].join('\n');
+}
+
+function buildManagedDocumentRootHeader (): string {
+    return [
+        '# Apache CLI managed document root',
+        '# This file is auto-generated. Manual changes may be overwritten.',
+        '',
+    ].join('\n');
+}
+
+function buildManagedDocumentRootBlock (
+    documentRootPath: string
+): string {
+    const safeDocumentRoot: string = normalizePathForApache(documentRootPath);
+
+    return [
+        DOCUMENT_ROOT_MARKER_START,
+        `DocumentRoot "${safeDocumentRoot}"`,
+        `<Directory "${safeDocumentRoot}">`,
+        '    AllowOverride All',
+        '    Require all granted',
+        '</Directory>',
+        DOCUMENT_ROOT_MARKER_END,
+        '',
+    ].join('\n');
+}
+
+function removeManagedListenDirectives (
+    httpdConfContent: string
+): string {
+    return httpdConfContent
+        .replace(/^\s*#?\s*Listen\s+.*$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trimEnd();
+}
+
+function removeManagedDocumentRootBlock (
+    httpdConfContent: string
+): string {
+    const managedPattern: RegExp = new RegExp(
+        `${DOCUMENT_ROOT_MARKER_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\s\S]*?${DOCUMENT_ROOT_MARKER_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n?`,
+        'm'
+    );
+
+    return httpdConfContent.replace(managedPattern, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+function setManagedCoreListenPort (
+    httpdConfContent: string,
+    coreListenPort: number
+): string {
+    const withoutExistingMarker: string = httpdConfContent.replace(/^# Apache CLI managed core listener\s*\n?/m, '').trimEnd();
+    return `${withoutExistingMarker}\n\n${CORE_LISTEN_MARKER}\nListen ${coreListenPort}\n`;
+}
+
+function setManagedDocumentRootInclude (
+    httpdConfContent: string
+): string {
+    const managedLine: string = `${MANAGED_DOCUMENT_ROOT_INCLUDE_MARKER}\nInclude conf/extra/apache-cli-document-root.conf`;
+    const managedPattern: RegExp = new RegExp(
+        `${MANAGED_DOCUMENT_ROOT_INCLUDE_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\nInclude\s+conf\/extra\/apache-cli-document-root\.conf`,
+        'm'
+    );
+
+    if (managedPattern.test(httpdConfContent)) {
+        return httpdConfContent.replace(managedPattern, managedLine);
+    }
+
+    return `${httpdConfContent.trimEnd()}\n\n${managedLine}\n`;
 }
 
 export function applyBuildPreset (
@@ -62,10 +132,12 @@ export function applyBuildPreset (
     nextContent = nextContent.replace(/c:\/Apache24/gi, apachePathPosix);
     nextContent = nextContent.replace(/^LoadModule\s+cgi_module/gm, '#LoadModule cgi_module');
     nextContent = nextContent.replace(/^LoadModule\s+userdir_module/gm, '#LoadModule userdir_module');
+    nextContent = nextContent.replace(/^#\s*LoadModule\s+rewrite_module/gm, 'LoadModule rewrite_module');
 
-    nextContent = nextContent.replace(/^(\s*)Listen\s+(.+)$/gm, '$1#Listen $2');
-
+    nextContent = removeManagedListenDirectives(nextContent);
+    nextContent = removeManagedDocumentRootBlock(nextContent);
     nextContent = setManagedCoreListenPort(nextContent, CORE_LISTEN_PORT_START);
+    nextContent = setManagedDocumentRootInclude(nextContent);
 
     if (/^\s*#\s*Include\s+conf\/extra\/httpd-vhosts\.conf\s*$/m.test(nextContent)) {
         nextContent = nextContent.replace(/^\s*#\s*Include\s+conf\/extra\/httpd-vhosts\.conf\s*$/m, 'Include conf/extra/httpd-vhosts.conf');
@@ -85,12 +157,12 @@ export function applyBuildPreset (
 export function applyStartConfig (
     httpdConfContent: string,
     serverNamePort: string,
-    coreListenPort: number,
-    documentRootPath: string
+    coreListenPort: number
 ): string {
-    let nextContent: string = setManagedCoreListenPort(httpdConfContent, coreListenPort);
-    nextContent = setManagedRequestedListenPort(nextContent, serverNamePort);
-    nextContent = setManagedDocumentRoot(nextContent, documentRootPath);
+    let nextContent: string = removeManagedListenDirectives(httpdConfContent);
+    nextContent = removeManagedDocumentRootBlock(nextContent);
+    nextContent = setManagedCoreListenPort(nextContent, coreListenPort);
+    nextContent = setManagedDocumentRootInclude(nextContent);
 
     if (/^#?ServerName\s+localhost:\d+/gm.test(nextContent)) {
         nextContent = nextContent.replace(/^#?ServerName\s+localhost:\d+/gm, `ServerName localhost:${serverNamePort}`);
@@ -101,58 +173,6 @@ export function applyStartConfig (
     }
 
     return nextContent;
-}
-
-function setManagedRequestedListenPort (
-    httpdConfContent: string,
-    requestedPort: string
-): string {
-    const managedLine: string = `${REQUESTED_LISTEN_MARKER}\nListen ${requestedPort}`;
-    const managedPattern: RegExp = new RegExp(`${REQUESTED_LISTEN_MARKER.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\nListen\\s+\\d+`, 'm');
-
-    if (managedPattern.test(httpdConfContent)) {
-        return httpdConfContent.replace(managedPattern, managedLine);
-    }
-
-    return `${httpdConfContent.trimEnd()}\n\n${managedLine}\n`;
-}
-
-function setManagedDocumentRoot (
-    httpdConfContent: string,
-    documentRootPath: string
-): string {
-    const safeDocumentRoot: string = normalizePathForApache(documentRootPath);
-    const managedBlock: string = [
-        DOCUMENT_ROOT_MARKER_START,
-        `DocumentRoot "${safeDocumentRoot}"`,
-        `<Directory "${safeDocumentRoot}">`,
-        '    AllowOverride None',
-        '    Require all granted',
-        '</Directory>',
-        DOCUMENT_ROOT_MARKER_END,
-    ].join('\n');
-
-    const managedPattern: RegExp = new RegExp(`${DOCUMENT_ROOT_MARKER_START.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}[\\s\\S]*?${DOCUMENT_ROOT_MARKER_END.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'm');
-
-    if (managedPattern.test(httpdConfContent)) {
-        return httpdConfContent.replace(managedPattern, managedBlock);
-    }
-
-    return `${httpdConfContent.trimEnd()}\n\n${managedBlock}\n`;
-}
-
-export function setManagedCoreListenPort (
-    httpdConfContent: string,
-    coreListenPort: number
-): string {
-    const managedLine: string = `${CORE_LISTEN_MARKER}\nListen ${coreListenPort}`;
-    const managedPattern: RegExp = new RegExp(`${CORE_LISTEN_MARKER.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\nListen\\s+\\d+`, 'm');
-
-    if (managedPattern.test(httpdConfContent)) {
-        return httpdConfContent.replace(managedPattern, managedLine);
-    }
-
-    return `${httpdConfContent.trimEnd()}\n\n${managedLine}\n`;
 }
 
 export async function clearVHostsConfigFile (): Promise<void> {
@@ -170,6 +190,17 @@ export async function writeManagedVHosts (
 
     const nextContent: string = `${header}${sections.join('')}`;
     await fsPromises.writeFile(VHOSTS_CONF_PATH, nextContent, 'utf8');
+}
+
+export async function clearManagedDocumentRootConfigFile (): Promise<void> {
+    await fsPromises.writeFile(MANAGED_DOCUMENT_ROOT_CONF_PATH, `${buildManagedDocumentRootHeader()}\n`, 'utf8');
+}
+
+export async function writeManagedDocumentRootConfig (
+    documentRootPath: string
+): Promise<void> {
+    const content: string = `${buildManagedDocumentRootHeader()}${buildManagedDocumentRootBlock(documentRootPath)}`;
+    await fsPromises.writeFile(MANAGED_DOCUMENT_ROOT_CONF_PATH, content, 'utf8');
 }
 
 /* :: :: Apache Config Helpers :: END :: */

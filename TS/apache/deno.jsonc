@@ -1,0 +1,20 @@
+{
+    "name": "@yggdrasil-au/apache-cli",
+    "version": "0.3.0",
+    "description": "Downloads, configures, and runs Apache with PHP runtime",
+    "type": "module",
+    "author": "Yggdrasil-au",
+    "license": "Apache-2.0",
+    "exports": {
+        ".": "./src/apache-cli.ts"
+    },
+    "bin": {
+        "apache-cli": "./src/apache-cli.ts"
+    },
+    "tasks": {
+        "start": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write ./src/apache-cli.ts start",
+        "build": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write ./src/apache-cli.ts build",
+        "apacheinstall": "deno task build",
+        "check": "deno check ./src/apache-cli.ts"
+    }
+}

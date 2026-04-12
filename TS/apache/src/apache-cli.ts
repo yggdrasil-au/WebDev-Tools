@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S deno run --allow-env --allow-net --allow-read --allow-run --allow-write
 
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
@@ -11,8 +11,8 @@ import * as readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
 
-import AdmZip from 'adm-zip';
-import { Command } from 'commander';
+import AdmZip from 'npm:adm-zip@^0.5.16';
+import { Command } from 'npm:commander@^14.0.1';
 
 import {
     APACHE_DIR,
@@ -25,18 +25,20 @@ import {
     PHP_ZIP_PATH,
     REQUEST_TIMEOUT_MS,
     RUNTIME_DIR,
-} from './constants.js';
+} from './constants.ts';
 import {
     applyBuildPreset,
     applyStartConfig,
+    clearManagedDocumentRootConfigFile,
     clearVHostsConfigFile,
     writeManagedVHosts,
-} from './apache-config.js';
+    writeManagedDocumentRootConfig,
+} from './apache-config.ts';
 import {
     isPortAvailable,
     isProcessAlive,
     terminateProcessByPid,
-} from './process-control.js';
+} from './process-control.ts';
 import {
     pruneRuntimeState,
     readProcessRegistry,
@@ -44,20 +46,20 @@ import {
     resetRuntimeRegistries,
     writeProcessRegistry,
     writeVHostRegistry,
-} from './registry.js';
+} from './registry.ts';
 import type {
     KillOptions,
     StartOptions,
     TrackedApacheProcess,
     TrackedVHost,
-} from './types.js';
+} from './types.ts';
 import {
     ensureDirectory,
     escapeRegExp,
     formatUnknownError,
     normalizePathForApache,
     safeUnlink,
-} from './utils.js';
+} from './utils.ts';
 
 type ManagedChildProcess = EventEmitter & {
     pid: number;
@@ -516,6 +518,7 @@ program
             const updatedConf: string = applyBuildPreset(originalConf);
             await fsPromises.writeFile(HTTPD_CONF_PATH, updatedConf, 'utf8');
 
+            await clearManagedDocumentRootConfigFile();
             await clearVHostsConfigFile();
             await resetRuntimeRegistries();
 
@@ -558,7 +561,9 @@ program
             }
 
             const originalConf: string = await fsPromises.readFile(HTTPD_CONF_PATH, 'utf8');
-            let updatedConf: string = applyStartConfig(originalConf, options.port, coreListenPort, resolvedDocumentRoot);
+            await writeManagedDocumentRootConfig(resolvedDocumentRoot);
+
+            let updatedConf: string = applyStartConfig(originalConf, options.port, coreListenPort);
             updatedConf = await mapUserConfigIncludes(updatedConf, options.config);
             await fsPromises.writeFile(HTTPD_CONF_PATH, updatedConf, 'utf8');
 

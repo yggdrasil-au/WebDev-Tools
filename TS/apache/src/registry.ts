@@ -3,15 +3,15 @@ import * as fsPromises from 'node:fs/promises';
 import {
     PROCESS_REGISTRY_PATH,
     VHOST_REGISTRY_PATH,
-} from './constants.js';
-import {
+} from './constants.ts';
+import type {
     RuntimeState,
     TrackedApacheProcess,
     TrackedVHost,
-} from './types.js';
+} from './types.ts';
 import {
     writeJsonFile,
-} from './utils.js';
+} from './utils.ts';
 
 /* :: :: Registry Helpers :: START :: */
 
