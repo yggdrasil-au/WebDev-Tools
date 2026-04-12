@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { expandGlob } from 'jsr:@std/fs';
+import { expandGlob } from 'jsr:@std/fs@1.0.23';
 
 import { addStat } from './stats.js';
 import { injectVariables } from './config.js';

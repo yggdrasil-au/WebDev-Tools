@@ -170,6 +170,27 @@ async function readManifestFile(filePath) {
 }
 
 /**
+ * @param {string[]} filePaths
+ * @returns {Promise<{ manifest: Record<string, unknown> | null, sourcePath: string | null }>}
+ */
+async function readFirstManifest(filePaths) {
+    for (const filePath of filePaths) {
+        const manifest = await readManifestFile(filePath);
+        if (isPlainObject(manifest)) {
+            return {
+                manifest,
+                sourcePath: filePath,
+            };
+        }
+    }
+
+    return {
+        manifest: null,
+        sourcePath: null,
+    };
+}
+
+/**
  * @param {string} packageName
  */
 function getUnscopedPackageName(packageName) {
@@ -574,14 +595,57 @@ async function loadLocalPackageMetadata(packageDirectory) {
 }
 
 /**
+ * Adds every executable local tool package found in the repository to the catalog.
+ *
+ * @param {Map<string, string[]>} localPackageDirectories
+ * @param {Map<string, ToolCandidate[]>} toolCatalog
+ */
+async function indexLocalPackageCandidates(localPackageDirectories, toolCatalog) {
+    for (const [packageName, packageDirectoryList] of localPackageDirectories.entries()) {
+        for (const packageDirectory of packageDirectoryList) {
+            const localMetadata = await loadLocalPackageMetadata(packageDirectory);
+            if (!isPlainObject(localMetadata)) {
+                continue;
+            }
+
+            const packageMetadataName = typeof localMetadata.name === 'string' ? localMetadata.name : packageName;
+            const toolEntries = collectLocalToolEntries(packageMetadataName, localMetadata);
+
+            if (toolEntries.entries.length === 0) {
+                continue;
+            }
+
+            for (const binEntry of toolEntries.entries) {
+                addToolCandidate(
+                    toolCatalog,
+                    createToolCandidate(
+                        'local-package',
+                        packageMetadataName,
+                        binEntry.binName,
+                        path.resolve(packageDirectory, binEntry.relativePath),
+                        toolEntries.sourcePath ?? path.join(packageDirectory, 'package.json')
+                    )
+                );
+            }
+        }
+    }
+}
+
+/**
  * Builds the catalog of managed commands from the site manifests.
  *
  * @param {string} siteRoot
  */
 export async function buildToolCatalog(siteRoot) {
     const configFiles = createConfigFiles(siteRoot);
-    const sitePackageJson = await readManifestFile(configFiles.packageJson);
-    const siteDenoJson = (await readManifestFile(configFiles.denoJson)) ?? (await readManifestFile(configFiles.denoJsonc));
+    const sitePackageManifest = await readFirstManifest([
+        configFiles.packageJson,
+        path.join(siteRoot, '.package.json'),
+    ]);
+    const siteDenoManifest = await readFirstManifest([
+        configFiles.denoJson,
+        configFiles.denoJsonc,
+    ]);
     const repositoryRoot = await findRepositoryRoot(siteRoot);
     const localPackageDirectories = await discoverLocalPackageDirectories(repositoryRoot);
     /** @type {Set<string>} */
@@ -589,21 +653,21 @@ export async function buildToolCatalog(siteRoot) {
     /** @type {Map<string, ToolCandidate[]>} */
     const toolCatalog = new Map();
 
-    if (isPlainObject(sitePackageJson)) {
-        for (const packageName of collectPackageNamesFromPackageJson(sitePackageJson)) {
+    if (isPlainObject(sitePackageManifest.manifest)) {
+        for (const packageName of collectPackageNamesFromPackageJson(sitePackageManifest.manifest)) {
             packageNames.add(packageName);
         }
     }
 
-    if (isPlainObject(siteDenoJson)) {
-        for (const packageName of collectPackageNamesFromDenoManifest(siteDenoJson)) {
+    if (isPlainObject(siteDenoManifest.manifest)) {
+        for (const packageName of collectPackageNamesFromDenoManifest(siteDenoManifest.manifest)) {
             packageNames.add(packageName);
         }
     }
 
-    if (isPlainObject(sitePackageJson)) {
-        const packageName = typeof sitePackageJson.name === 'string' ? sitePackageJson.name : null;
-        const packageBinEntries = normalizeBinEntries(packageName ?? '', sitePackageJson.bin);
+    if (isPlainObject(sitePackageManifest.manifest)) {
+        const packageName = typeof sitePackageManifest.manifest.name === 'string' ? sitePackageManifest.manifest.name : null;
+        const packageBinEntries = normalizeBinEntries(packageName ?? '', sitePackageManifest.manifest.bin);
 
         if (packageName) {
             const sitePackageDirectories = localPackageDirectories.get(packageName) ?? [siteRoot];
@@ -625,43 +689,13 @@ export async function buildToolCatalog(siteRoot) {
         }
     }
 
+    await indexLocalPackageCandidates(localPackageDirectories, toolCatalog);
+
     for (const packageName of packageNames) {
         const localPackageDirectoryList = localPackageDirectories.get(packageName) ?? [];
-        if (localPackageDirectoryList.length > 0) {
-            let hasLocalCandidates = false;
-
-            for (const packageDirectory of localPackageDirectoryList) {
-                const localMetadata = await loadLocalPackageMetadata(packageDirectory);
-                if (!isPlainObject(localMetadata)) {
-                    continue;
-                }
-
-                const packageMetadataName = typeof localMetadata.name === 'string' ? localMetadata.name : packageName;
-                const toolEntries = collectLocalToolEntries(packageMetadataName, localMetadata);
-
-                if (toolEntries.entries.length === 0) {
-                    continue;
-                }
-
-                hasLocalCandidates = true;
-
-                for (const binEntry of toolEntries.entries) {
-                    addToolCandidate(
-                        toolCatalog,
-                        createToolCandidate(
-                            'local-package',
-                            packageMetadataName,
-                            binEntry.binName,
-                            path.resolve(packageDirectory, binEntry.relativePath),
-                            toolEntries.sourcePath ?? path.join(packageDirectory, 'package.json')
-                        )
-                    );
-                }
-            }
-
-            if (hasLocalCandidates) {
+        const localPackageCandidates = toolCatalog.get(packageName) ?? [];
+        if (localPackageDirectoryList.length > 0 && localPackageCandidates.length > 0) {
                 continue;
-            }
         }
 
         const packageMetadata = await loadPackageMetadata(packageName);
@@ -777,14 +811,22 @@ function describeToolCandidates(candidates) {
  * @param {string} targetName
  * @param {ToolCandidate[]} candidates
  */
-function resolveExplicitToolTarget(targetName, candidates) {
-    const matches = candidates.filter((candidate) => {
+function findToolMatches(targetName, candidates) {
+    return candidates.filter((candidate) => {
         return (
             candidate.packageName === targetName ||
             getUnscopedPackageName(candidate.packageName) === targetName ||
             candidate.binName === targetName
         );
     });
+}
+
+/**
+ * @param {string} targetName
+ * @param {ToolCandidate[]} candidates
+ */
+function resolveExplicitToolTarget(targetName, candidates) {
+    const matches = findToolMatches(targetName, candidates);
 
     if (matches.length === 0) {
         throw new Error(`Workspace tool "${targetName}" was not found.`);
@@ -793,6 +835,26 @@ function resolveExplicitToolTarget(targetName, candidates) {
     if (matches.length > 1) {
         throw new Error(
             `Workspace tool "${targetName}" is ambiguous. Matches: ${describeToolCandidates(matches).join(', ')}.`
+        );
+    }
+
+    return matches[0];
+}
+
+/**
+ * @param {string} targetName
+ * @param {ToolCandidate[]} candidates
+ */
+function resolveImplicitToolTarget(targetName, candidates) {
+    const matches = findToolMatches(targetName, candidates);
+
+    if (matches.length === 0) {
+        return null;
+    }
+
+    if (matches.length > 1) {
+        throw new Error(
+            `Command "${targetName}" is ambiguous. Matches: ${describeToolCandidates(matches).join(', ')}.`
         );
     }
 
@@ -933,6 +995,26 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
             kind: 'shell',
             rawCommand: trimmedCommand,
             shellKind: 'cross-shell',
+        };
+    }
+
+    if (hasShellOperators(trimmedCommand)) {
+        return {
+            kind: 'shell',
+            rawCommand: trimmedCommand,
+            shellKind: 'cross-shell',
+        };
+    }
+
+    const toolCandidates = Array.from(toolCatalog.values()).flat();
+    const implicitTool = resolveImplicitToolTarget(tokens[0], toolCandidates);
+    if (implicitTool) {
+        return {
+            kind: 'tool',
+            rawCommand: trimmedCommand,
+            firstToken: tokens[0],
+            args: tokens.slice(1),
+            tool: implicitTool,
         };
     }
 

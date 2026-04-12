@@ -21,10 +21,14 @@ interface TypeScriptPluginOptions {
 }
 
 const root: string = Deno.cwd()
-const pkgPath: string = path.resolve(root, 'package.json')
+const pkgPathCandidates: string[] = [
+    path.resolve(root, 'package.json'),
+    path.resolve(root, '.package.json'),
+]
+const pkgPath: string | undefined = pkgPathCandidates.find((candidate: string) => fs.existsSync(candidate))
 
-if (!fs.existsSync(pkgPath)) {
-    console.error('Error: package.json not found in current directory.')
+if (!pkgPath) {
+    console.error('Error: package.json or .package.json not found in current directory.')
     Deno.exit(1)
 }
 

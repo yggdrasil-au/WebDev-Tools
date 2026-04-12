@@ -64,7 +64,8 @@ scripts:
   # =================================================================
   # 6. IMPORTANT: Explicit Command Tags
   # =================================================================
-  # The runner now uses explicit prefixes instead of an ambiguous shell fallback.
+  # The runner prefers explicit prefixes, but bare commands can also resolve
+  # to discovered workspace tools or catalogued executables when unambiguous.
   #
   # Use `path:` for executables that should be launched directly from PATH.
   #
