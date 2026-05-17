@@ -1,5 +1,5 @@
-import fg from 'fast-glob'
-import { minify } from 'html-minifier-terser'
+import fg from 'npm:fast-glob@3.3.3'
+import { minify } from 'npm:html-minifier-terser@7.2.0'
 import { Engine } from 'php-parser'
 
 // Initialize the PHP Parser Engine
