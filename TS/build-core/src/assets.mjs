@@ -203,12 +203,14 @@ export function createAssetManager({
         cleanupWebsite = false,
         cleanupCapSync = true,
     } = {}) {
+        log('Starting split of dist into website and capacitorsync outputs...')
         if (!(await pathExists(abs.distRoot))) {
             throw new Error(`Missing build output directory: ${abs.distRoot}`)
         }
 
         if (dryRun) log('[dry-run] create fresh', abs.website, 'and', abs.capSync)
         else {
+            log('Creating fresh', abs.website, 'and', abs.capSync)
             await emptyDir(abs.website)
             await emptyDir(abs.capSync)
         }
@@ -217,6 +219,7 @@ export function createAssetManager({
             log('[dry-run] copy dist -> website')
             log('[dry-run] copy dist -> capacitorsync')
         } else {
+            log('Copying dist -> website and capacitorsync...')
             await copyPath(abs.distRoot, abs.website, { overwrite: true, dereference: true })
             await copyPath(abs.distRoot, abs.capSync, { overwrite: true, dereference: true })
         }

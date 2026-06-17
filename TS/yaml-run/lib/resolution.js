@@ -990,6 +990,9 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
         const args = explicitTokens.slice(1);
 
         if (explicitCommand.prefix === 'npm') {
+            // npm: items installed by deno are already included in the Path by deno when executing yaml-run as a deno task
+            // npm items are an extension of the path: prefix with additional logic specific to npm package resolution
+            /* old method, this wont work for packages that need to use the local node_modules
             return {
                 kind: 'tool',
                 rawCommand: trimmedCommand,
@@ -1003,7 +1006,38 @@ export function classifyCommand(commandText, scriptConfig, toolCatalog) {
                     sourcePath: `npm:${targetName}/package.json`,
                     label: `npm-package:${targetName}:${getUnscopedPackageName(targetName)}`,
                 },
+            };*/
+            // 1. Strip version tags if present (e.g., 'astro@latest' -> 'astro', '@capacitor/cli@6.0' -> '@capacitor/cli')
+            let cleanPackageName = targetName;
+            const versionIndex = cleanPackageName.lastIndexOf('@');
+            if (versionIndex > 0) {
+                cleanPackageName = cleanPackageName.slice(0, versionIndex);
+            }
+
+            // 2. Query the catalog to find the true binary name (e.g. '@capacitor/cli' exposes 'cap')
+            const allCandidates = Array.from(toolCatalog.values()).flat();
+            const matches = allCandidates.filter(c =>
+                c.packageName === cleanPackageName || getUnscopedPackageName(c.packageName) === cleanPackageName
+            );
+
+            // 3. Fallback to the unscoped name (e.g. 'astro'), but prefer catalog matches
+            let binName = getUnscopedPackageName(cleanPackageName);
+            if (matches.length > 0) {
+                const bestMatch = matches.find(c => c.kind === 'site-bin' || c.kind === 'local-package') || matches[0];
+                binName = bestMatch.binName;
+            }
+
+            // 4. Return as a native 'path' execution.
+            // Because 'yaml-run' was launched via 'deno task', the workspace '.bin' folder
+            // is already in the OS PATH, so it will natively execute the local Vite/Astro wrappers!
+            return {
+                kind: 'path',
+                rawCommand: trimmedCommand,
+                firstToken: binName,
+                executable: binName,
+                args,
             };
+
         }
 
         const resolvedTool = resolveExplicitToolTarget(targetName, Array.from(toolCatalog.values()).flat());

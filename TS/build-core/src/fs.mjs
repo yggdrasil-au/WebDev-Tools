@@ -56,44 +56,126 @@ export async function emptyDir(dir) {
     await ensureDir(dir)
 }
 
-export async function copyPath(from, to, {
-    overwrite = true,
-    dereference = false,
-} = {}) {
-    await ensureDir(path.dirname(to))
+// Assumes ensureDir, removePath, entryIsDirectory, entryIsSymbolicLink, and path are available in scope
 
-    const st = await Deno.lstat(from)
+// Pre-calculate the total byte size of the target directory/file
+async function calculateTotalSize(target, dereference) {
+    let total = 0;
+    const st = await Deno.lstat(target);
+
     if (entryIsDirectory(st)) {
-        await ensureDir(to)
-        for await (const entry of Deno.readDir(from)) {
-            const src = path.join(from, entry.name)
-            const dst = path.join(to, entry.name)
-            await copyPath(src, dst, { overwrite, dereference })
+        for await (const entry of Deno.readDir(target)) {
+            total += await calculateTotalSize(path.join(target, entry.name), dereference);
         }
-        return
+    } else if (entryIsSymbolicLink(st)) {
+        if (dereference) {
+            const real = await Deno.realPath(target);
+            const realSt = await Deno.stat(real);
+            if (realSt.isFile) {
+                total += realSt.size;
+            }
+        }
+    } else if (st.isFile) {
+        total += st.size;
+    }
+
+    return total;
+}
+
+// Inline terminal progress bar utilizing a carriage return
+function renderProgress(current, total) {
+    const width = 40;
+    const percent = total === 0 ? 100 : Math.floor((current / total) * 100);
+    const completed = total === 0 ? width : Math.floor((width * current) / total);
+    const bar = "█".repeat(completed) + "-".repeat(width - completed);
+    
+    const currentMB = (current / 1024 / 1024).toFixed(2);
+    const totalMB = (total / 1024 / 1024).toFixed(2);
+    
+    const text = `\rCopying: [${bar}] ${percent}% (${currentMB} / ${totalMB} MB)`;
+    Deno.stdout.writeSync(new TextEncoder().encode(text));
+}
+
+// Web stream chunk copier to measure progress mid-file
+async function streamCopyWithProgress(from, to, state) {
+    const src = await Deno.open(from, { read: true });
+    const dst = await Deno.open(to, { write: true, create: true, truncate: true });
+
+    const transform = new TransformStream({
+        transform(chunk, controller) {
+            state.current += chunk.byteLength;
+            renderProgress(state.current, state.total);
+            controller.enqueue(chunk);
+        }
+    });
+
+    await src.readable.pipeThrough(transform).pipeTo(dst.writable);
+}
+
+// The internal recursive worker
+async function _copyPathRecursive(from, to, options, state) {
+    const { overwrite, dereference } = options;
+    await ensureDir(path.dirname(to));
+
+    const st = await Deno.lstat(from);
+    if (entryIsDirectory(st)) {
+        await ensureDir(to);
+        for await (const entry of Deno.readDir(from)) {
+            const src = path.join(from, entry.name);
+            const dst = path.join(to, entry.name);
+            await _copyPathRecursive(src, dst, options, state);
+        }
+        return;
     }
 
     if (entryIsSymbolicLink(st)) {
         if (!dereference) {
-            const link = await Deno.readLink(from)
+            const link = await Deno.readLink(from);
             if (overwrite) {
-                await removePath(to).catch(() => {})
+                await removePath(to).catch(() => {
+                    // Ignore error if path doesn't exist
+                });
             }
-            await Deno.symlink(link, to)
-            return
+            await Deno.symlink(link, to);
+            return;
         }
-        const real = await Deno.realPath(from)
+        
+        const real = await Deno.realPath(from);
         if (overwrite) {
-            await removePath(to).catch(() => {})
+            await removePath(to).catch(() => {
+                // Ignore error if path doesn't exist
+            });
         }
-        await Deno.copyFile(real, to)
-        return
+        await streamCopyWithProgress(real, to, state);
+        return;
     }
 
     if (overwrite) {
-        await removePath(to).catch(() => {})
+        await removePath(to).catch(() => {
+            // Ignore error if path doesn't exist
+        });
     }
-    await Deno.copyFile(from, to)
+    
+    await streamCopyWithProgress(from, to, state);
+}
+
+// Main exported function
+export async function copyPath(from, to, {
+    overwrite = true,
+    dereference = false,
+} = {}) {
+    const totalSize = await calculateTotalSize(from, dereference);
+    
+    // Pass state object by reference so the transform stream can mutate it
+    const state = { current: 0, total: totalSize };
+    
+    // Render the initial 0% state
+    renderProgress(0, totalSize);
+    
+    await _copyPathRecursive(from, to, { overwrite, dereference }, state);
+    
+    // Drop down to a fresh line when finished so subsequent logs aren't overwritten
+    Deno.stdout.writeSync(new TextEncoder().encode("\n"));
 }
 
 function shouldIncludeName(name, { includeDot }) {
