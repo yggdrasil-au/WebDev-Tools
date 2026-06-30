@@ -1,13 +1,13 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-net --allow-run
 
 import fs from "node:fs";
 
 import chalk from "chalk";
 import yaml from "yaml";
 
-import type { DeployConfig, DeploymentProfile } from "./config.js";
-import { mergeDefaults, resolveDeploymentTarget } from "./config.js";
-import { Deployer } from "./core/Deployer.js";
+import type { DeployConfig, DeploymentProfile } from "./config.ts";
+import { mergeDefaults, resolveDeploymentTarget } from "./config.ts";
+import { Deployer } from "./core/Deployer.ts";
 
 /* :: :: Entrypoint :: START :: */
 
@@ -18,20 +18,20 @@ async function main(): Promise<void> {
 
     try {
         const config: DeployConfig = loadConfig();
-        const profileName: string | null = parseProfile(process.argv, config);
+        const profileName: string | null = parseProfile(Deno.args, config);
 
         if (!profileName) {
             console.log(chalk.red("No profile specified."));
-            console.log("Usage: deploy --<profile> or --profile <profile>");
+            console.log("Usage: deno task deploy --<profile> or --profile <profile>");
             console.log(`Available profiles: ${Object.keys(config.deployments ?? {}).join(", ")}`);
-            process.exit(1);
+            Deno.exit(1);
             return;
         }
 
         const profile: DeploymentProfile | undefined = config.deployments?.[profileName];
         if (!profile) {
             console.log(chalk.red(`Profile '${profileName}' not found.`));
-            process.exit(1);
+            Deno.exit(1);
             return;
         }
 
@@ -46,11 +46,11 @@ async function main(): Promise<void> {
         const deployer = new Deployer(profile);
         await deployer.runAsync();
 
-        process.exit(0);
+        Deno.exit(0);
     } catch (error) {
         const message: string = error instanceof Error ? error.message : String(error);
         console.error(chalk.red(message));
-        process.exit(1);
+        Deno.exit(1);
     }
 }
 

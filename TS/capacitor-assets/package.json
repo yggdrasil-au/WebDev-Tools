@@ -15,7 +15,7 @@
     "capacitor-assets": "./bin/capacitor-assets"
   },
   "scripts": {
-    "old::prepare": "husky install",
+    "prepare": "husky install",
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest --maxWorkers=4",
@@ -23,7 +23,8 @@
     "fmt": "npm run prettier -- --write",
     "eslint": "eslint . --ext ts",
     "prettier": "prettier 'src/**/*.ts'",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "npm run build"
   },
   "prettier": "@ionic/prettier-config",
   "eslintConfig": {

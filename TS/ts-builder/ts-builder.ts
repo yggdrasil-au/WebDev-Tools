@@ -139,6 +139,7 @@ async function bundleFile(inputFile: string, outputFile: string): Promise<void> 
 /**
  * Recursively finds all .ts files in a directory.
  * Files starting with an underscore (_) are ignored (treated as private/partials).
+ * Supports symlinked files and directories.
  */
 function findTSFiles(dir: string): string[] {
     if (!fs.existsSync(dir)) return []
@@ -148,11 +149,28 @@ function findTSFiles(dir: string): string[] {
 
     for (const entry of list) {
         const fullPath: string = path.join(dir, entry.name)
+        
+        let isDir = entry.isDirectory()
+        let isFile = entry.isFile()
 
-        if (entry.isDirectory()) {
+        // Resolve symlinks to their target type
+        if (entry.isSymbolicLink()) {
+            try {
+                // fs.statSync follows the symlink (unlike lstatSync)
+                const stat = fs.statSync(fullPath)
+                isDir = stat.isDirectory()
+                isFile = stat.isFile()
+            } catch (error) {
+                // Ignore broken symlinks
+                console.warn(`Skipping broken symlink: ${fullPath}`)
+                continue
+            }
+        }
+
+        if (isDir) {
             results = results.concat(findTSFiles(fullPath))
         } else if (
-            entry.isFile() &&
+            isFile &&
             entry.name.endsWith('.ts') &&
             !entry.name.startsWith('_')
         ) {

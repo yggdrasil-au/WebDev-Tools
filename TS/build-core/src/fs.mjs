@@ -1,4 +1,7 @@
 import path from 'node:path'
+import { defaultLogger } from './logger.mjs'
+
+const { vlog } = defaultLogger(false)
 
 function readEntryFlag(entry, flagNames) {
     for (const flagName of flagNames) {
@@ -87,7 +90,7 @@ function renderProgress(state) {
     const percent = total === 0 ? 100 : Math.floor((current / total) * 100)
     const completed = total === 0 ? width : Math.floor((width * current) / total)
     const bar = "█".repeat(completed) + "-".repeat(width - completed)
-    
+
     const currentMB = (current / 1024 / 1024).toFixed(2)
     const totalMB = (total / 1024 / 1024).toFixed(2)
 
@@ -117,7 +120,7 @@ function renderProgress(state) {
             etaStr = ` | ETA: calc...`
         }
     }
-    
+
     // padEnd ensures that if the ETA string shrinks (e.g., "10s" to "9s"), the trailing characters are overwritten
     const text = `\rCopying: [${bar}] ${percent}% (${currentMB} / ${totalMB} MB)${etaStr}`.padEnd(85, " ")
     Deno.stdout.writeSync(new TextEncoder().encode(text))
@@ -144,46 +147,60 @@ async function _copyPathRecursive(from, to, options, state) {
     const { overwrite, dereference } = options
     await ensureDir(path.dirname(to))
 
-    const st = await Deno.lstat(from)
-    if (entryIsDirectory(st)) {
-        await ensureDir(to)
-        for await (const entry of Deno.readDir(from)) {
-            const src = path.join(from, entry.name)
-            const dst = path.join(to, entry.name)
-            await _copyPathRecursive(src, dst, options, state)
-        }
-        return
-    }
-
-    if (entryIsSymbolicLink(st)) {
-        if (!dereference) {
-            const link = await Deno.readLink(from)
-            if (overwrite) {
-                await removePath(to).catch(() => {
-                    // Ignore error if path doesn't exist
-                })
+    try {
+        const st = await Deno.lstat(from)
+        if (entryIsDirectory(st)) {
+            await ensureDir(to)
+            for await (const entry of Deno.readDir(from)) {
+                const src = path.join(from, entry.name)
+                const dst = path.join(to, entry.name)
+                await _copyPathRecursive(src, dst, options, state)
             }
-            await Deno.symlink(link, to)
             return
         }
-        
-        const real = await Deno.realPath(from)
-        if (overwrite) {
-            await removePath(to).catch(() => {
-                // Ignore error if path doesn't exist
-            })
-        }
-        await streamCopyWithProgress(real, to, state)
-        return
-    }
 
-    if (overwrite) {
-        await removePath(to).catch(() => {
-            // Ignore error if path doesn't exist
-        })
+        if (entryIsSymbolicLink(st)) {
+            vlog(`[symlink] ${from} -> ${to}`)
+            if (!dereference) {
+                const link = await Deno.readLink(from)
+                if (overwrite) {
+                    await removePath(to).catch(() => {})
+                }
+                await Deno.symlink(link, to)
+                return
+            }
+
+            const real = await Deno.realPath(from)
+            const realSt = await Deno.stat(real) // Get stats of the actual target
+
+            if (realSt.isDirectory) {
+                // FIX: If the target is a directory, recurse instead of streaming
+                await ensureDir(to)
+                for await (const entry of Deno.readDir(real)) {
+                    const src = path.join(real, entry.name)
+                    const dst = path.join(to, entry.name)
+                    await _copyPathRecursive(src, dst, options, state)
+                }
+                return
+            }
+
+            // Otherwise, it is a file; perform stream copy
+            if (overwrite) {
+                await removePath(to).catch(() => {})
+            }
+            await streamCopyWithProgress(real, to, state)
+            return
+        }
+
+        if (overwrite) {
+            await removePath(to).catch(() => {})
+        }
+
+        await streamCopyWithProgress(from, to, state)
+    } catch (err) {
+        console.error(`\n[FATAL] Error copying file: "${from}" -> "${to}"`);
+        throw err;
     }
-    
-    await streamCopyWithProgress(from, to, state)
 }
 
 // Main exported function
@@ -192,19 +209,19 @@ export async function copyPath(from, to, {
     dereference = false,
 } = {}) {
     const totalSize = await calculateTotalSize(from, dereference)
-    
+
     // Pass state object by reference so the transform stream can mutate it
-    const state = { 
-        current: 0, 
-        total: totalSize, 
-        startTime: Date.now() 
+    const state = {
+        current: 0,
+        total: totalSize,
+        startTime: Date.now()
     }
-    
+
     // Render the initial 0% state
     renderProgress(state)
-    
+
     await _copyPathRecursive(from, to, { overwrite, dereference }, state)
-    
+
     // Drop down to a fresh line when finished so subsequent logs aren't overwritten
     Deno.stdout.writeSync(new TextEncoder().encode("\n"))
 }

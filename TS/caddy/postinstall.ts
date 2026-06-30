@@ -6,7 +6,7 @@ import {
     getExecutableNameForPlatform,
     getExecutablePath,
     getRuntimeDir,
-} from "./lib/runtime-paths.mjs";
+} from "./lib/runtime-paths.ts";
 
 /* :: :: Constants :: START :: */
 
@@ -15,7 +15,7 @@ const RELEASE_BASE_URL = `https://github.com/caddyserver/caddy/releases/download
 const CHECKSUMS_URL = `${RELEASE_BASE_URL}/caddy_${CADDY_VERSION}_checksums.txt`;
 const textDecoder = new TextDecoder();
 
-const TARGET_ASSETS = {
+const TARGET_ASSETS: Record<string, string> = {
     "windows:x86_64": `caddy_${CADDY_VERSION}_windows_amd64.zip`,
     "windows:aarch64": `caddy_${CADDY_VERSION}_windows_arm64.zip`,
     "linux:x86_64": `caddy_${CADDY_VERSION}_linux_amd64.tar.gz`,
@@ -28,24 +28,24 @@ const TARGET_ASSETS = {
 
 /* :: :: Helpers :: START :: */
 
-function logInfo (message) {
+function logInfo(message: string): void {
     console.log(`[caddy-cli postinstall] ${message}`);
 }
 
-function logWarning (message) {
+function logWarning(message: string): void {
     console.warn(`[caddy-cli postinstall] warning: ${message}`);
 }
 
-function getPlatformKey () {
+function getPlatformKey(): string {
     return `${Deno.build.os}:${Deno.build.arch}`;
 }
 
-function getTargetAssetName () {
+function getTargetAssetName(): string | null {
     const key = getPlatformKey();
     return TARGET_ASSETS[key] ?? null;
 }
 
-async function pathExists (inputPath) {
+async function pathExists(inputPath: string): Promise<boolean> {
     try {
         await Deno.stat(inputPath);
         return true;
@@ -53,21 +53,29 @@ async function pathExists (inputPath) {
         if (error instanceof Deno.errors.NotFound) {
             return false;
         }
-
         throw error;
     }
 }
 
-async function downloadText (url) {
+async function safeRemove(inputPath: string, options?: { recursive?: boolean }): Promise<void> {
+    try {
+        await Deno.remove(inputPath, options);
+    } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) {
+            throw error;
+        }
+    }
+}
+
+async function downloadText(url: string): Promise<string> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status} while downloading text from ${url}`);
     }
-
     return await response.text();
 }
 
-async function downloadFile (url, destinationPath) {
+async function downloadFile(url: string, destinationPath: string): Promise<void> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status} while downloading ${url}`);
@@ -91,7 +99,7 @@ async function downloadFile (url, destinationPath) {
     }
 }
 
-async function hashFile (filePath, algorithm) {
+async function hashFile(filePath: string, algorithm: string): Promise<string> {
     const hash = crypto.createHash(algorithm);
     const file = await Deno.open(filePath, { read: true });
 
@@ -106,7 +114,7 @@ async function hashFile (filePath, algorithm) {
     return hash.digest("hex");
 }
 
-function parseChecksumForAsset (checksumsText, assetName) {
+function parseChecksumForAsset(checksumsText: string, assetName: string): string | null {
     const lines = checksumsText.split(/\r?\n/);
     for (const line of lines) {
         const match = line.match(/^([a-fA-F0-9]{32,})\s+\*?(.+)$/);
@@ -120,11 +128,10 @@ function parseChecksumForAsset (checksumsText, assetName) {
             return hash;
         }
     }
-
     return null;
 }
 
-function getHashAlgorithmFromDigestLength (digestLength) {
+function getHashAlgorithmFromDigestLength(digestLength: number): string | null {
     switch (digestLength) {
         case 64: {
             return "sha256";
@@ -141,7 +148,7 @@ function getHashAlgorithmFromDigestLength (digestLength) {
     }
 }
 
-async function runCommand (command, args) {
+async function runCommand(command: string, args: string[]): Promise<void> {
     const result = await new Deno.Command(command, {
         args,
         stderr: "piped",
@@ -155,7 +162,7 @@ async function runCommand (command, args) {
     }
 }
 
-async function extractArchive (archivePath, targetDir, assetName) {
+async function extractArchive(archivePath: string, targetDir: string, assetName: string): Promise<void> {
     const extractDir = path.join(targetDir, `extract-${Date.now()}`);
     await Deno.mkdir(extractDir, { recursive: true });
 
@@ -187,7 +194,7 @@ async function extractArchive (archivePath, targetDir, assetName) {
 
         logInfo(`Caddy is ready: ${getExecutablePath()}`);
     } finally {
-        await Deno.remove(extractDir, { recursive: true, force: true });
+        await safeRemove(extractDir, { recursive: true });
     }
 }
 
@@ -197,7 +204,7 @@ async function extractArchive (archivePath, targetDir, assetName) {
 
 /* :: :: Main :: START :: */
 
-async function main () {
+async function main(): Promise<void> {
     try {
         await ensureRuntimeDir();
 
@@ -234,6 +241,7 @@ async function main () {
             const actualChecksum = hashAlgorithm
                 ? await hashFile(archivePath, hashAlgorithm)
                 : "";
+
             if (actualChecksum !== expectedChecksum) {
                 logWarning([
                     `Checksum mismatch for ${assetName}.`,
@@ -250,7 +258,7 @@ async function main () {
         logInfo("Extracting caddy executable...");
         await extractArchive(archivePath, getRuntimeDir(), assetName);
 
-        await Deno.remove(archivePath, { force: true });
+        await safeRemove(archivePath);
     } catch (error) {
         console.error(`[caddy-cli postinstall] failed: ${error instanceof Error ? error.message : String(error)}`);
         Deno.exit(1);

@@ -4,9 +4,9 @@ import chalk from "chalk";
 import cliProgress from "cli-progress";
 import type { SFTPWrapper } from "ssh2";
 
-import type { DeploymentMode, DeploymentProfile } from "../config.js";
-import type { SshClient } from "../utils/ssh.js";
-import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.js";
+import type { DeploymentMode, DeploymentProfile } from "../config.ts";
+import type { SshClient } from "../utils/ssh.ts";
+import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.ts";
 
 export class SftpDeployment {
     public constructor (

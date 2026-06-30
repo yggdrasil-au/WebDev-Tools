@@ -13,13 +13,7 @@ import {
     toPosixPath,
 } from './fs.mjs'
 
-function defaultLogger(verbose) {
-    return {
-        log: (...m) => console.log('[assets]', ...m),
-        warn: (...m) => console.warn('[assets]', ...m),
-        vlog: (...m) => { if (verbose) console.log('[assets]', ...m) },
-    }
-}
+import { defaultLogger } from './logger.mjs'
 
 export function createAssetManager({
     rootDir = Deno.cwd(),
@@ -73,16 +67,47 @@ export function createAssetManager({
     }
 
     async function prepare() {
-        await prepareDistRoots()
-        const ok = await copyIfExists(abs.srcAssets, abs.distAssets, 'static')
-        if (ok) log('Copied source/assets -> www/dist/assets')
+        log('Starting asset preparation...');
+        vlog('Working Directory:', rootDir);
+        vlog('Dist Root:', abs.distRoot);
 
-        if (icons?.fromRel && icons?.toRel) {
-            const from = path.resolve(rootDir, icons.fromRel)
-            const to = path.resolve(rootDir, distRootRel, icons.toRel)
-            await prepareDistRoots()
-            await copyIfExists(from, to, 'icons')
+        await prepareDistRoots();
+
+        // 1. Static Assets
+        log('Phase 1: Copying static assets...');
+        vlog(`Source: ${abs.srcAssets}`);
+        vlog(`Destination: ${abs.distAssets}`);
+
+        const staticOk = await copyIfExists(abs.srcAssets, abs.distAssets, 'static');
+
+        if (staticOk) {
+            log('  -> Static assets successfully copied.');
+        } else {
+            log('  -> Static assets skipped (source not found or empty).');
         }
+
+        // 2. Icons
+        if (icons?.fromRel && icons?.toRel) {
+            const from = path.resolve(rootDir, icons.fromRel);
+            const to = path.resolve(rootDir, distRootRel, icons.toRel);
+
+            log('Phase 2: Copying icons...');
+            vlog(`Source: ${from}`);
+            vlog(`Destination: ${to}`);
+
+            await prepareDistRoots();
+            const iconOk = await copyIfExists(from, to, 'icons');
+
+            if (iconOk) {
+                log('  -> Icons successfully copied.');
+            } else {
+                log('  -> Icons skipped (source not found or empty).');
+            }
+        } else {
+            vlog('Skipping icon task (no configuration provided).');
+        }
+
+        log('Asset preparation complete.');
     }
 
     async function stageWebOnlyTopLevelIntoDist() {

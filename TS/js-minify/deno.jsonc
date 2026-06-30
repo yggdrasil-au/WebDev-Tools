@@ -1,0 +1,16 @@
+{
+    "name": "@yggdrasil-au/js-minify",
+    "version": "0.2.0",
+    "tasks": {
+        "minify": "deno run --allow-read --allow-write ./js-minify.ts"
+    },
+    "imports": {
+        "@std/fs": "jsr:@std/fs@^1.0.14",
+        "@std/path": "jsr:@std/path@^1.0.8",
+        "fast-glob": "npm:fast-glob@^3.3.3",
+        "terser": "npm:terser@^5.46.0"
+    },
+    "exports": {
+        ".": "./js-minify.ts"
+    }
+}

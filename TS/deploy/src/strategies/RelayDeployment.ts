@@ -7,9 +7,9 @@ import ora from "ora";
 import type { ConnectConfig } from "ssh2";
 import * as tar from "tar";
 
-import type { DeploymentMode, DeploymentProfile } from "../config.js";
-import { SshClient } from "../utils/ssh.js";
-import { sftpFastPut } from "../utils/sftp.js";
+import type { DeploymentMode, DeploymentProfile } from "../config.ts";
+import { SshClient } from "../utils/ssh.ts";
+import { sftpFastPut } from "../utils/sftp.ts";
 
 export class RelayDeployment {
     public constructor (

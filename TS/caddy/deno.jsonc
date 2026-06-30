@@ -1,0 +1,11 @@
+{
+    "name": "@yggdrasil-au/caddy",
+    "version": "0.1.1",
+    "tasks": {
+        "postinstall": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write ./postinstall.ts",
+        "start": "deno run --allow-env --allow-read --allow-run ./caddy-cli.ts start"
+    },
+    "exports": {
+        ".": "./caddy-cli.ts"
+    }
+}

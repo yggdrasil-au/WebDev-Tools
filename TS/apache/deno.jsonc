@@ -16,5 +16,8 @@
         "build": "deno run --allow-env --allow-net --allow-read --allow-run --allow-write ./src/apache-cli.ts build",
         "apacheinstall": "deno task build",
         "check": "deno check ./src/apache-cli.ts"
+    },
+    "imports": {
+        "adm-zip": "npm:adm-zip@^0.5.16"
     }
 }

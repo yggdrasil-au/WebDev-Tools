@@ -7,10 +7,10 @@ import cliProgress from "cli-progress";
 import type { ConnectConfig, SFTPWrapper } from "ssh2";
 import * as tar from "tar";
 
-import type { DeploymentMode, DeploymentProfile } from "../config.js";
-import type { SshClient } from "../utils/ssh.js";
-import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.js";
-import { SshClient as SshClientImpl } from "../utils/ssh.js";
+import type { DeploymentMode, DeploymentProfile } from "../config.ts";
+import type { SshClient } from "../utils/ssh.ts";
+import { sftpCreateRecursive, sftpFastPut } from "../utils/sftp.ts";
+import { SshClient as SshClientImpl } from "../utils/ssh.ts";
 
 interface TarBatch {
     files: string[];

@@ -4,8 +4,8 @@ import path from "node:path";
 import chalk from "chalk";
 import ora from "ora";
 
-import type { DeploymentMode } from "../config.js";
-import type { SshClient } from "../utils/ssh.js";
+import type { DeploymentMode } from "../config.ts";
+import type { SshClient } from "../utils/ssh.ts";
 
 export class DiffEngine {
     public constructor (

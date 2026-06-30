@@ -1,8 +1,7 @@
 #!/usr/bin/env deno
 
-import path from "node:path";
-
-import { getExecutablePath } from "./lib/runtime-paths.mjs";
+import { resolve } from "jsr:@std/path@1.1.5";
+import { getExecutablePath } from "./lib/runtime-paths.ts";
 
 const textDecoder = new TextDecoder();
 
@@ -18,8 +17,16 @@ function printUsage () {
     ].join("\n"));
 }
 
-function parseFlags (args) {
-    const flags = {};
+interface ParsedFlags {
+    ConfigFile?: string;
+    DocumentRoot?: string;
+    port?: string;
+    output?: boolean;
+    [key: string]: string | boolean | undefined;
+}
+
+function parseFlags (args: string[]): ParsedFlags {
+    const flags: ParsedFlags = {};
 
     for (let index = 0; index < args.length; index += 1) {
         const token = args[index];
@@ -48,14 +55,14 @@ function parseFlags (args) {
     return flags;
 }
 
-function resolveAbsolutePath (inputPath) {
+function resolveAbsolutePath (inputPath: string | undefined) {
     if (!inputPath) {
         return "";
     }
-    return path.resolve(Deno.cwd(), inputPath);
+    return resolve(Deno.cwd(), inputPath);
 }
 
-async function pathExists (inputPath) {
+async function pathExists (inputPath: string | URL) {
     try {
         await Deno.stat(inputPath);
         return true;
@@ -68,7 +75,7 @@ async function pathExists (inputPath) {
     }
 }
 
-function validatePort (portValue) {
+function validatePort (portValue: any) {
     const port = Number(portValue);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         throw new Error(`Invalid --port value: ${portValue}`);
@@ -76,7 +83,7 @@ function validatePort (portValue) {
     return String(port);
 }
 
-function buildRunArguments (configPath) {
+function buildRunArguments (configPath: string) {
     const lowerConfigPath = configPath.toLowerCase();
     if (lowerConfigPath.endsWith(".json")) {
         return ["run", "--config", configPath];
@@ -91,7 +98,7 @@ function buildRunArguments (configPath) {
 
 /* :: :: Commands :: START :: */
 
-async function startServer (args) {
+async function startServer (args: string[]): Promise<number> {
     const flags = parseFlags(args);
 
     const configPath = resolveAbsolutePath(flags.ConfigFile);

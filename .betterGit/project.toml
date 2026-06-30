@@ -1,7 +1,7 @@
 major = 0
 minor = 2
-patch = 12
+patch = 13
 isAlpha = false
 isBeta = false
 isNodeProject = false
-isDenoProject = false
+isDenoProject = true

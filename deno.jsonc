@@ -1,0 +1,21 @@
+{
+    "nodeModulesDir": "manual",
+    "tasks": {
+        "postinstall": "deno install"
+    },
+    "workspace": [
+        "./TS/**/*"
+    ],
+    "allowScripts": [
+        "npm:@yggdrasil-au/caddy",
+        "npm:@yggdrasil-au/capacitor-assets"
+    ],
+    "lint": {
+        "exclude": ["**/node_modules", "**/dist", "**/web_dist", "**/cap_sync", "**/www, subModules/Anime-dimension-api", "**/subModules", "*.mjs", "*.js"],
+        "rules": {
+            "tags": ["fresh", "jsr", "jsx", "react", "recommended", "workspace"],
+            "include": [],
+            "exclude": ["no-import-prefix", "no-explicit-any", "verbatim-module-syntax", "no-unused-vars"]
+        }
+    },
+}

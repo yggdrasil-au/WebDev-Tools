@@ -6,12 +6,12 @@ import Enquirer from "enquirer";
 import ora from "ora";
 import type { ConnectConfig, SFTPWrapper } from "ssh2";
 
-import { resolveDeploymentTarget, type DeploymentTarget, type DeploymentProfile } from "../config.js";
-import { DiffEngine } from "./DiffEngine.js";
-import { RelayDeployment } from "../strategies/RelayDeployment.js";
-import { SftpDeployment } from "../strategies/SftpDeployment.js";
-import { TarDeployment } from "../strategies/TarDeployment.js";
-import { SshClient, type SshExecResult } from "../utils/ssh.js";
+import { resolveDeploymentTarget, type DeploymentTarget, type DeploymentProfile } from "../config.ts";
+import { DiffEngine } from "./DiffEngine.ts";
+import { RelayDeployment } from "../strategies/RelayDeployment.ts";
+import { SftpDeployment } from "../strategies/SftpDeployment.ts";
+import { TarDeployment } from "../strategies/TarDeployment.ts";
+import { SshClient, type SshExecResult } from "../utils/ssh.ts";
 import {
     sftpCreateRecursive,
     sftpMkdir,
@@ -19,7 +19,7 @@ import {
     sftpRename,
     sftpStat,
     sftpUnlink,
-} from "../utils/sftp.js";
+} from "../utils/sftp.ts";
 
 interface SelectPrompt {
     run(): Promise<string>;

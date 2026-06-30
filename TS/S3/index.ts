@@ -5,4 +5,4 @@
  *   import { uploadToR2, getConfigFromSqlite } from '@yggdrasil-au/cloudflare-r2';
  */
 
-export { uploadToR2, getConfigFromSqlite } from './cloudflare-R2.mjs';
+export { uploadToR2, getConfigFromSqlite } from "./cloudflare-r2.ts";
